@@ -34,7 +34,7 @@ do
             FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, 
             SnapFrequency = 0.03, ReactionTime = 0.22, Intensity = 1.0, 
             TargetBone = "Head", EnableLead = true, ProjectileSpeed = 800.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Normal" 
+            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Normal", AimKeyMode = "HoldRMB", VisibleOnly = false, TeamCheck = true
         },
         ["Leve"] = { 
             FOV = 30.0, Smoothing = 0.25, SpeedMultiplier = 0.75, TrackingPrecision = 0.98, 
@@ -679,7 +679,7 @@ do
 
         -- 3. NOVO: Chaves de Alternância (Previsão Balística & Chams ESP)
         local togglesContainer = Instance.new("Frame")
-        togglesContainer.Size = UDim2.new(1, 0, 0, 75)
+        togglesContainer.Size = UDim2.new(1, 0, 0, 140)
         togglesContainer.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
         togglesContainer.LayoutOrder = 3
         togglesContainer.Parent = contentScroll
@@ -737,7 +737,9 @@ do
         end
 
         CreateToggle("Previsão Balística (Lead):", "EnableLead", 8)
-        CreateToggle("ESP Chams Visível/Parede:", "EnableESP", 40)
+        CreateToggle("ESP Chams Visível/Parede:", "EnableESP", 38)
+        CreateToggle("Apenas Visíveis (WallCheck):", "VisibleOnly", 68)
+        CreateToggle("Filtro de Equipe (TeamCheck):", "TeamCheck", 98)
 
         -- 4. Parametros Numericos (TextBox)
         local paramsContainer = Instance.new("Frame")
@@ -1085,13 +1087,35 @@ local function GetBonePart(char: Model, boneSetting: string): BasePart?
     return char:FindFirstChild("Head") :: BasePart? or char:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
 
--- Seleciona o melhor alvo dentro do FOV e atualiza ESP
+-- Seleciona o melhor alvo dentro do FOV e atualiza ESP com WallCheck & TeamCheck
+local isRightMouseDown = false
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isRightMouseDown = true
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isRightMouseDown = false
+    end
+end)
+
+local function IsTeammate(otherPlayer: Player): boolean
+    if not SimConfig.Get("TeamCheck") then return false end
+    if LocalPlayer.Team and otherPlayer.Team then
+        return LocalPlayer.Team == otherPlayer.Team
+    end
+    return false
+end
+
 local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
     local myPos = myRoot and myRoot.Position or Camera.CFrame.Position
     local boneSetting = SimConfig.Get("TargetBone") or "Head"
     local fov = SimConfig.Get("FOV") or 45.0
     local enableESP = SimConfig.Get("EnableESP")
+    local visibleOnly = SimConfig.Get("VisibleOnly")
 
     local bestAngle = fov
     local chosenPos: Vector3? = nil
@@ -1104,7 +1128,7 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
     local camLook = Camera.CFrame.LookVector
 
     for _, other in ipairs(Players:GetPlayers()) do
-        if other ~= LocalPlayer and other.Character then
+        if other ~= LocalPlayer and other.Character and not IsTeammate(other) then
             local char = other.Character
             local hum = char:FindFirstChildOfClass("Humanoid")
 
@@ -1130,14 +1154,19 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
                 end
                 targetLastPosCache[other] = { pos = currentPos, time = now }
 
-                -- Checagem de obstrucao de visao
+                -- Checagem de obstrucao de visao (WallCheck)
                 local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
 
-                -- Atualiza ESP Chams para todos os jogadores no mapa
+                -- Atualiza ESP Chams (Verde = Visivel / Vermelho = Parede)
                 if enableESP then
                     ESPVisualizer.UpdateTarget(char, obstructed, false)
                 else
                     ESPVisualizer.Clear(char)
+                end
+
+                -- Se a opcao "Apenas Visiveis" estiver ligada, ignora quem esta atras de parede
+                if visibleOnly and obstructed then
+                    continue
                 end
 
                 -- Calcula o angulo em relacao a mira (FOV)
@@ -1156,10 +1185,15 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
                     end
                 end
             end
+        else
+            if other ~= LocalPlayer and other.Character and IsTeammate(other) then
+                -- Limpa ESP de companheiros de equipe
+                ESPVisualizer.Clear(other.Character)
+            end
         end
     end
 
-    -- Destaca o alvo focado com cor mais evidente no ESP
+    -- Destaca o alvo focado com cor evidente no ESP
     if chosenModel and enableESP then
         ESPVisualizer.UpdateTarget(chosenModel, isObstructed, true)
     end
@@ -1176,7 +1210,10 @@ DashboardGUI.OnStartRequested = function()
         local targetPos, targetVel, targetModel, obstructed = GetTargetData()
         local now = os.clock()
 
-        if targetPos and isRunning then
+        -- Ativa mira suave quando segurar o Botao Direito do Mouse (ou se estiver dentro do FOV)
+        local shouldAim = isRunning and (isRightMouseDown or not SimConfig.Get("HoldToAim"))
+
+        if targetPos and shouldAim then
             local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
             local reactionTime = SimConfig.Get("ReactionTime") or 0.2
 
@@ -1188,14 +1225,17 @@ DashboardGUI.OnStartRequested = function()
                 telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
             end
 
-            Camera.CFrame = telem.cframe
+            -- Deadzone sutil: se o erro angular for minusculo (< 0.4 graus), nao treme a camera
+            if telem.angularErrorDeg and telem.angularErrorDeg > 0.4 then
+                Camera.CFrame = telem.cframe
+            end
 
             if (now - lastUiUpdate) >= 0.1 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay(telem)
             end
         else
-            -- Sem alvo no FOV: mantem camera livre e atualiza telemetria em repouso
+            -- Sem alvo no FOV ou nao esta segurando RMB: mantem camera livre
             if (now - lastUiUpdate) >= 0.1 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay({
@@ -1250,13 +1290,13 @@ task.defer(function()
     DashboardGUI.OnStartRequested()
 end)
 
-print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [HOME] para abrir/fechar.")
+print("[DeepHat v4.0] Suite Pro com Previsao Balistica, Chams ESP, WallCheck e AimLock carregada! [HOME] para abrir/fechar.")
 
 -- Notificacao no chat / console para confirmar carregamento
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "DeepHat v4.0 Ativado",
-        Text = "Funções ativas! Pressione [HOME] para abrir o menu.",
-        Duration = 5
+        Title = "DeepHat v4.0 PRO",
+        Text = "Aim + WallCheck + ESP ativos! Segure o Botão Direito para mirar.",
+        Duration = 6
     })
 end)
