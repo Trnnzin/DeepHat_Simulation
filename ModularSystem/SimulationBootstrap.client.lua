@@ -84,7 +84,10 @@ local function GetTargetPosition(): Vector3
 end
 
 -- Loop de renderizacao contínuo de alta frequencia
-RunService.RenderStepped:Connect(function(dt: number)
+local BIND_NAME = "DeepHat_SimulationCameraPipeline"
+pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
+
+RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt: number)
     local success, err = pcall(function()
         local isRunning = SimConfig.Get("SimulationActive")
         local now = os.clock()
@@ -135,6 +138,7 @@ end
 
 DashboardGUI.OnStopRequested = function()
     SimConfig.Set("SimulationActive", false)
+    pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
     print("[Simulador] Teste PARADO")
 end
 

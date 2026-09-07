@@ -11,9 +11,37 @@
 -- 7. Exportador de Relatorio Estatistico de Telemetria no Console
 -- 8. Throttling de UI a 10Hz e Zero-Allocation de Memoria (Zero Lag)
 
+-- Limpeza estrita de qualquer sessao anterior ou interface fantasma
+local function PurgeAllLegacyUIs()
+    local containers = {}
+    pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
+    local pGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pGui then table.insert(containers, pGui) end
+
+    local targetNames = {
+        "DiagnosticSimulationDashboard",
+        "KinematicsSimulationDashboard",
+        "DeepHat_GUI",
+        "FovCircleOverlay",
+        "DeepHat_ESP_Highlight"
+    }
+
+    for _, container in ipairs(containers) do
+        for _, name in ipairs(targetNames) do
+            local found = container:FindFirstChild(name)
+            while found do
+                pcall(function() found:Destroy() end)
+                found = container:FindFirstChild(name)
+            end
+        end
+    end
+end
+PurgeAllLegacyUIs()
+
 if _G.DeepHat_Cleanup then
     pcall(_G.DeepHat_Cleanup)
 end
+
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -300,53 +328,69 @@ do
         return self.CachedTelemetry
     end
 
-    function AdvancedKinematics:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
+        function AdvancedKinematics:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
         local eyePos = Camera.CFrame.Position
         self.CurrentCFrame = Camera.CFrame
         local targetPosition = self:ComputeLead(rawTargetPosition, targetVelocity, eyePos)
         local toTarget = (targetPosition - eyePos)
-        if toTarget.Magnitude < 0.001 then return self.CachedTelemetry end
+        local dist = toTarget.Magnitude
 
-        local dirToTarget = toTarget.Unit
+        -- Otimizacao de Magnitude & Guarda Epsilon
+        if dist < 0.001 then return self.CachedTelemetry end
+
+        -- Vetor unitario direto sem recalculate de magnitude
+        local dirToTarget = toTarget / dist
         local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
         local angularErrorDeg = math.deg(math.acos(dot))
 
-        local fov = SimConfig.Get("FOV") or 45.0
-        local baseSmoothing = SimConfig.Get("Smoothing") or 0.14
-        local speedMult = SimConfig.Get("SpeedMultiplier") or 1.0
-        local precision = SimConfig.Get("TrackingPrecision") or 0.95
-        local intensity = SimConfig.Get("Intensity") or 1.0
+        local fov = math.max(SimConfig.Get("FOV") or 60.0, 1.0)
+        local baseSmoothing = math.clamp(SimConfig.Get("Smoothing") or 0.15, 0.005, 1.0)
+        local speedMult = math.clamp((SimConfig.Get("MoveSpeed") or 16.0) / 16.0, 0.25, 3.0)
+        local precision = math.clamp((SimConfig.Get("TrackingPrecision") or 98.5) / 100.0, 0.5, 1.0)
+        local intensity = math.clamp((SimConfig.Get("Intensity") or 75.0) / 100.0, 0.0, 2.0)
+        local maxRadius = SimConfig.Get("VectorRadius") or 250.0
 
-        if angularErrorDeg > fov then
+        if dist > maxRadius or angularErrorDeg > fov then
             self.CachedTelemetry.angularVelocity = 0
             self.CachedTelemetry.angularJerk = 0
             self.CachedTelemetry.suspicionScore = 0
             self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
             self.CachedTelemetry.position = eyePos
             self.CachedTelemetry.cframe = self.CurrentCFrame
-            self.CachedTelemetry.mode = "SMOOTH"
+            self.CachedTelemetry.mode = "IDLE"
             self.CachedTelemetry.angularErrorDeg = angularErrorDeg
             self.CachedTelemetry.predictedPosition = targetPosition
             return self.CachedTelemetry
         end
 
+        -- Curva de Aceleracao Hermite Smoothstep com expoente de gradiente
         local normalizedErr = math.clamp(angularErrorDeg / fov, 0.0, 1.0)
-        local accelerationFactor = Smoothstep(normalizedErr)
-        local dynamicAlpha = math.clamp(baseSmoothing * speedMult * (0.35 + 0.65 * accelerationFactor), 0.005, 1.0)
+        local smoothFactor = normalizedErr * normalizedErr * (3.0 - 2.0 * normalizedErr)
+        local accelExponent = SimConfig.Get("AccelerationCurve") or 1.25
+        smoothFactor = math.pow(smoothFactor, accelExponent)
+
+        -- Interpolacao Frame-rate Independent via Exponential Decay (Sem Jittering e Sem Delay)
+        local safeDt = math.clamp(dt or 0.0166, 0.001, 0.1)
+        local k = (baseSmoothing * 28.0 * speedMult) * (0.35 + 0.65 * smoothFactor)
+        local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
         local targetRotation = CFrame.lookAt(eyePos, targetPosition)
         local smoothedRotation = self.CurrentCFrame:Lerp(targetRotation, dynamicAlpha)
 
-        local now = os.clock()
-        local jitterAmp = (1.0 - precision) * intensity * 0.8
-        local noiseFreq = 3.2 * intensity
-        local pitchJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed, 0.5) * jitterAmp)
-        local yawJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed + 100, 0.5) * jitterAmp)
-        self.CurrentCFrame = smoothedRotation * CFrame.Angles(pitchJitter, yawJitter, 0)
+        -- Jitter organico atenuado perto do centro da mira
+        local jitterAmplitude = (1.0 - precision) * intensity * 0.4 * math.clamp(angularErrorDeg / 10.0, 0.0, 1.0)
+        if jitterAmplitude > 0.0001 then
+            local now = os.clock()
+            local noiseFreq = 3.5 * intensity
+            local pitchJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed, 0.5) * jitterAmplitude)
+            local yawJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed + 100, 0.5) * jitterAmplitude)
+            self.CurrentCFrame = smoothedRotation * CFrame.Angles(pitchJitter, yawJitter, 0)
+        else
+            self.CurrentCFrame = smoothedRotation
+        end
 
         local newLook = self.CurrentCFrame.LookVector
         local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
-        local safeDt = (dt and dt > 0) and dt or 0.0166
         local angVel = math.deg(math.acos(deltaDot)) / safeDt
         local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
         self.PreviousAngularVelocity = angVel
@@ -1261,42 +1305,42 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
     return chosenPos, chosenVel, chosenModel, isObstructed
 end
 
+local BIND_PIPELINE = "DeepHat_StandaloneCameraTracking"
+
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat v4.0] Simulador e Funcoes ATIVADAS!")
+    print("[DeepHat v4.0] Simulador e Funcoes ATIVADAS! (Zero-Latency Pipeline)")
 
-    conn = RunService.RenderStepped:Connect(function(dt)
+    pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
+
+    RunService:BindToRenderStep(BIND_PIPELINE, Enum.RenderPriority.Camera.Value + 1, function(dt)
         local targetPos, targetVel, targetModel, obstructed = GetTargetData()
         local now = os.clock()
 
-        -- Ativa mira suave quando segurar o Botao Direito do Mouse (ou se estiver dentro do FOV)
         local shouldAim = isRunning and (isRightMouseDown or not SimConfig.Get("HoldToAim"))
 
         if targetPos and shouldAim then
             local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
-            local reactionTime = SimConfig.Get("ReactionTime") or 0.2
+            local responseTimeSec = (SimConfig.Get("ResponseTime") or 16) / 1000.0
 
             local telem
-            if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
+            if math.random() < snapFreq and (now - lastSnapTime > responseTimeSec) then
                 lastSnapTime = now
                 telem = Kinematics:StepSnap(targetPos, targetVel, dt)
             else
                 telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
             end
 
-            -- Deadzone sutil: se o erro angular for minusculo (< 0.4 graus), nao treme a camera
-            if telem.angularErrorDeg and telem.angularErrorDeg > 0.4 then
-                Camera.CFrame = telem.cframe
-            end
+            -- Rastreamento instantaneo no frame sem congelamento ou atraso
+            Camera.CFrame = telem.cframe
 
-            if (now - lastUiUpdate) >= 0.1 then
+            if (now - lastUiUpdate) >= 0.066 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay(telem)
             end
         else
-            -- Sem alvo no FOV ou nao esta segurando RMB: mantem camera livre
-            if (now - lastUiUpdate) >= 0.1 then
+            if (now - lastUiUpdate) >= 0.2 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay({
                     angularVelocity = 0,
@@ -1312,6 +1356,7 @@ end
 DashboardGUI.OnStopRequested = function()
     if not isRunning then return end
     isRunning = false
+    pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
     if conn then conn:Disconnect(); conn = nil end
     ESPVisualizer.ClearAll()
     print("[DeepHat v4.0] Simulador PARADO!")
@@ -1327,6 +1372,7 @@ DashboardGUI.OnExportRequested = function()
 end
 
 _G.DeepHat_Cleanup = function()
+    pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
     if conn then conn:Disconnect(); conn = nil end
     ESPVisualizer.ClearAll()
     if guiInstance and guiInstance.Parent then guiInstance:Destroy() end

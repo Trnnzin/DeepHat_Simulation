@@ -56,6 +56,33 @@ end
 function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local hostParent = parentGui or (RunService:IsStudio() and Players.LocalPlayer:WaitForChild("PlayerGui") or CoreGui)
 
+    
+    -- Purga completa de qualquer interface legada para evitar sobreposicoes ou Z-Index issues
+    local function PurgeAllLegacyUIs()
+        local containers = {}
+        pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
+        local pGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pGui then table.insert(containers, pGui) end
+
+        local targetNames = {
+            "DiagnosticSimulationDashboard",
+            "KinematicsSimulationDashboard",
+            "DeepHat_GUI",
+            "FovCircleOverlay"
+        }
+
+        for _, container in ipairs(containers) do
+            for _, name in ipairs(targetNames) do
+                local found = container:FindFirstChild(name)
+                while found do
+                    pcall(function() found:Destroy() end)
+                    found = container:FindFirstChild(name)
+                end
+            end
+        end
+    end
+    PurgeAllLegacyUIs()
+
     local existing = hostParent:FindFirstChild("DiagnosticSimulationDashboard")
     if existing then existing:Destroy() end
 
@@ -63,6 +90,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     screenGui.Name = "DiagnosticSimulationDashboard"
     screenGui.ResetOnSpawn = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.DisplayOrder = 9999
     screenGui.Parent = hostParent
 
     -- Janela Principal (Compacta, 3 Colunas, Draggable)
