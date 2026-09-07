@@ -1001,7 +1001,7 @@ do
             end
         end)
 
-        function (DashboardGUI :: any):UpdateTelemetryDisplay(data: any)
+        DashboardGUI.UpdateTelemetryDisplay = function(self, data: any)
             if not data then return end
             statusVel.Text = string.format("Velocidade Angular: %.1f deg/s", data.angularVelocity or 0)
             statusObs.Text = string.format("Linha de Visao: %s", data.isObstructed and "OBSTRUIDO (Parede)" or "LIVRE")
