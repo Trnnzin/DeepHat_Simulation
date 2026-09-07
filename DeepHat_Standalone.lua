@@ -316,7 +316,8 @@ local ESPVisualizer = {}
 do
     local activeHighlights: { [Model]: Highlight } = {}
 
-    local function GetOrCreateHighlight(character: Model): Highlight
+    local function GetOrCreateHighlight(character: Model): Highlight?
+        if not character then return nil end
         local hl = activeHighlights[character]
         if not hl or not hl.Parent then
             hl = Instance.new("Highlight")
@@ -358,7 +359,8 @@ do
         end
     end
 
-    function ESPVisualizer.Clear(character: Model)
+    function ESPVisualizer.Clear(character: Model?)
+        if not character then return end
         local hl = activeHighlights[character]
         if hl then
             pcall(function() hl:Destroy() end)
@@ -1641,8 +1643,10 @@ _G.DeepHat_Cleanup = function()
 end
 
 Players.PlayerRemoving:Connect(function(plr)
-    if plr.Character then ESPVisualizer.Clear(plr.Character) end
-    targetLastPosCache[plr.Character] = nil
+    if plr and plr.Character then
+        ESPVisualizer.Clear(plr.Character)
+        targetLastPosCache[plr.Character] = nil
+    end
 end)
 
 SimConfig.Subscribe("EnableESP", function(enabled)
