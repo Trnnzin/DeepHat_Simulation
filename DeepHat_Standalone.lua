@@ -57,96 +57,205 @@ local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Ca
 -- =========================================================================
 local SimConfig = {}
 do
-    local PROFILES = {
-        ["Normal"] = { 
-            FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, 
-            SnapFrequency = 0.03, ReactionTime = 0.22, Intensity = 1.0, 
-            TargetBone = "Head", EnableLead = true, ProjectileSpeed = 800.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Normal", AimKeyMode = "HoldRMB", VisibleOnly = false, TeamCheck = true
-        },
-        ["Leve"] = { 
-            FOV = 30.0, Smoothing = 0.25, SpeedMultiplier = 0.75, TrackingPrecision = 0.98, 
-            SnapFrequency = 0.00, ReactionTime = 0.28, Intensity = 0.6, 
-            TargetBone = "UpperTorso", EnableLead = false, ProjectileSpeed = 800.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Leve" 
-        },
-        ["Medio"] = { 
-            FOV = 60.0, Smoothing = 0.09, SpeedMultiplier = 1.4, TrackingPrecision = 0.90, 
-            SnapFrequency = 0.15, ReactionTime = 0.15, Intensity = 1.3, 
-            TargetBone = "Head", EnableLead = true, ProjectileSpeed = 1000.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Medio" 
-        },
-        ["Agressivo"] = { 
-            FOV = 90.0, Smoothing = 0.02, SpeedMultiplier = 2.2, TrackingPrecision = 0.75, 
-            SnapFrequency = 0.65, ReactionTime = 0.05, Intensity = 2.0, 
-            TargetBone = "Head", EnableLead = true, ProjectileSpeed = 1200.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Agressivo" 
-        },
-        ["Custom"] = { 
-            FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, 
-            SnapFrequency = 0.03, ReactionTime = 0.20, Intensity = 1.0, 
-            TargetBone = "Closest", EnableLead = true, ProjectileSpeed = 800.0,
-            EnableESP = true, ShowFovCircle = true, ActiveProfile = "Custom" 
-        }
+    local PROFILES: { [string]: ProfileData } = {
+    ["Normal"] = {
+        SimulationActive = false,
+        FOV = 60.0,
+        Smoothing = 0.15,
+        AngularVelocity = 180.0,
+        ResponseTime = 16,
+        TrajectoryPrecision = 98.5,
+        UpdateFrequency = 60,
+        VectorRadius = 150.0,
+        ActiveProfile = "Normal",
+        EventFrequency = 20,
+        Intensity = 75,
+        MoveSpeed = 16.0,
+        AccelerationCurve = 1.25,
+        CycleDuration = 30,
+        SimulatedAgents = 4,
+        TargetRegion = "Head"
+    },
+    ["Leve"] = {
+        SimulationActive = false,
+        FOV = 40.0,
+        Smoothing = 0.28,
+        AngularVelocity = 120.0,
+        ResponseTime = 30,
+        TrajectoryPrecision = 95.0,
+        UpdateFrequency = 30,
+        VectorRadius = 100.0,
+        ActiveProfile = "Leve",
+        EventFrequency = 10,
+        Intensity = 40,
+        MoveSpeed = 12.0,
+        AccelerationCurve = 1.0,
+        CycleDuration = 20,
+        SimulatedAgents = 2,
+        TargetRegion = "Torso"
+    },
+    ["Medio"] = {
+        SimulationActive = false,
+        FOV = 75.0,
+        Smoothing = 0.09,
+        AngularVelocity = 280.0,
+        ResponseTime = 10,
+        TrajectoryPrecision = 90.0,
+        UpdateFrequency = 60,
+        VectorRadius = 200.0,
+        ActiveProfile = "Medio",
+        EventFrequency = 30,
+        Intensity = 85,
+        MoveSpeed = 22.0,
+        AccelerationCurve = 1.6,
+        CycleDuration = 45,
+        SimulatedAgents = 6,
+        TargetRegion = "Head"
+    },
+    ["Agressivo"] = {
+        SimulationActive = false,
+        FOV = 120.0,
+        Smoothing = 0.02,
+        AngularVelocity = 540.0,
+        ResponseTime = 2,
+        TrajectoryPrecision = 80.0,
+        UpdateFrequency = 120,
+        VectorRadius = 350.0,
+        ActiveProfile = "Agressivo",
+        EventFrequency = 50,
+        Intensity = 100,
+        MoveSpeed = 32.0,
+        AccelerationCurve = 2.4,
+        CycleDuration = 60,
+        SimulatedAgents = 10,
+        TargetRegion = "Head"
+    },
+    ["Custom"] = {
+        SimulationActive = false,
+        FOV = 60.0,
+        Smoothing = 0.15,
+        AngularVelocity = 180.0,
+        ResponseTime = 16,
+        TrajectoryPrecision = 98.5,
+        UpdateFrequency = 60,
+        VectorRadius = 150.0,
+        ActiveProfile = "Custom",
+        EventFrequency = 20,
+        Intensity = 75,
+        MoveSpeed = 16.0,
+        AccelerationCurve = 1.25,
+        CycleDuration = 30,
+        SimulatedAgents = 4,
+        TargetRegion = "Head"
     }
+}
 
-    local CurrentState = table.clone(PROFILES["Normal"])
-    local KeyListeners: { [string]: { (any) -> () } } = {}
-    local GlobalListeners: { (string, any) -> () } = {}
+-- Estado inicial ativo
+local CurrentState: ProfileData = {
+    SimulationActive = false,
+    FOV = 60.0,
+    Smoothing = 0.15,
+    AngularVelocity = 180.0,
+    ResponseTime = 16,
+    TrajectoryPrecision = 98.5,
+    UpdateFrequency = 60,
+    VectorRadius = 150.0,
+    ActiveProfile = "Normal",
+    EventFrequency = 20,
+    Intensity = 75,
+    MoveSpeed = 16.0,
+    AccelerationCurve = 1.25,
+    CycleDuration = 30,
+    SimulatedAgents = 4,
+    TargetRegion = "Head"
+}
 
-    function SimConfig.Get(key: string): any
-        return (CurrentState :: any)[key]
+-- Observadores (Observer Pattern)
+local KeyListeners: { [string]: { (any) -> () } } = {}
+local GlobalListeners: { (string, any) -> () } = {}
+
+function SimConfig.Get(key: string): any
+    return (CurrentState :: any)[key]
+end
+
+function SimConfig.GetAll(): ProfileData
+    local clone: any = {}
+    for k, v in pairs(CurrentState) do
+        clone[k] = v
+    end
+    return clone
+end
+
+function SimConfig.Set(key: string, value: any, silent: boolean?)
+    if (CurrentState :: any)[key] == value then
+        return
     end
 
-    function SimConfig.GetAll()
-        return table.clone(CurrentState)
+    (CurrentState :: any)[key] = value
+
+    -- Se o usuario alterar um parametro individualmente sem selecionar perfil, muda para Custom
+    if key ~= "ActiveProfile" and key ~= "SimulationActive" and CurrentState.ActiveProfile ~= "Custom" then
+        CurrentState.ActiveProfile = "Custom"
+        SimConfig.Notify("ActiveProfile", "Custom")
     end
 
-    function SimConfig.Set(key: string, value: any, silent: boolean?)
-        if (CurrentState :: any)[key] == value then return end
-        (CurrentState :: any)[key] = value
+    if not silent then
+        SimConfig.Notify(key, value)
+    end
+end
 
-        if key ~= "ActiveProfile" and CurrentState.ActiveProfile ~= "Custom" then
-            CurrentState.ActiveProfile = "Custom"
-            SimConfig.Notify("ActiveProfile", "Custom")
+function SimConfig.Notify(key: string, value: any)
+    if KeyListeners[key] then
+        for _, callback in ipairs(KeyListeners[key]) do
+            task.spawn(callback, value)
         end
-        if not silent then SimConfig.Notify(key, value) end
     end
 
-    function SimConfig.Notify(key: string, value: any)
-        if KeyListeners[key] then
-            for _, cb in ipairs(KeyListeners[key]) do task.spawn(cb, value) end
-        end
-        for _, cb in ipairs(GlobalListeners) do task.spawn(cb, key, value) end
+    for _, callback in ipairs(GlobalListeners) do
+        task.spawn(callback, key, value)
     end
+end
 
-    function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
-        KeyListeners[key] = KeyListeners[key] or {}
-        table.insert(KeyListeners[key], callback)
-        return function()
-            local list = KeyListeners[key]
-            if not list then return end
-            local idx = table.find(list, callback)
-            if idx then table.remove(list, idx) end
-        end
+function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
+    if not KeyListeners[key] then
+        KeyListeners[key] = {}
     end
+    table.insert(KeyListeners[key], callback)
 
-    function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
-        table.insert(GlobalListeners, callback)
-        return function()
-            local idx = table.find(GlobalListeners, callback)
-            if idx then table.remove(GlobalListeners, idx) end
+    return function()
+        local list = KeyListeners[key]
+        if not list then return end
+        local idx = table.find(list, callback)
+        if idx then
+            table.remove(list, idx)
         end
     end
+end
 
-    function SimConfig.LoadProfile(profileName: string)
-        local profile = PROFILES[profileName]
-        if not profile then return end
-        for k, v in pairs(profile) do
+function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
+    table.insert(GlobalListeners, callback)
+    return function()
+        local idx = table.find(GlobalListeners, callback)
+        if idx then
+            table.remove(GlobalListeners, idx)
+        end
+    end
+end
+
+function SimConfig.LoadProfile(profileName: string)
+    local profile = PROFILES[profileName]
+    if not profile then
+        warn(string.format("[SimConfig] Perfil desconhecido: %s", tostring(profileName)))
+        return
+    end
+
+    for k, v in pairs(profile) do
+        if k ~= "SimulationActive" then -- Preserva o estado de ativacao
             (CurrentState :: any)[k] = v
             SimConfig.Notify(k, v)
         end
     end
+end
 end
 
 -- =========================================================================
@@ -637,6 +746,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         Componente de Slider com Input Numerico Sincronizado
     --]]
     local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number): Frame
+        minVal = tonumber(minVal) or 0
+        maxVal = tonumber(maxVal) or 100
+        step = tonumber(step) or 1
+        if step <= 0 then step = 1 end
+        local safeDefault = tonumber(defaultVal) or tonumber(SimConfig.Get(configKey)) or minVal
+        local span = math.max(maxVal - minVal, 0.0001)
+
         local container = Instance.new("Frame")
         container.Size = UDim2.new(1, 0, 0, 44)
         container.BackgroundTransparency = 1
@@ -663,7 +779,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         inputBox.TextColor3 = THEME.ACCENT_RED
         inputBox.Font = Enum.Font.GothamBold
         inputBox.TextSize = 11
-        inputBox.Text = string.format(step < 1 and "%.2f" or "%d", defaultVal)
+        inputBox.Text = string.format(step < 1 and "%.2f" or "%d", safeDefault)
         inputBox.ClearTextOnFocus = false
         inputBox.Parent = headerRow
         AddCorner(inputBox, 4)
@@ -677,7 +793,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         AddCorner(track, 3)
 
         local progress = Instance.new("Frame")
-        local initialRatio = math.clamp((defaultVal - minVal) / (maxVal - minVal), 0, 1)
+        local initialRatio = math.clamp((safeDefault - minVal) / span, 0, 1)
         progress.Size = UDim2.new(initialRatio, 0, 1, 0)
         progress.BackgroundColor3 = THEME.ACCENT_RED
         progress.BorderSizePixel = 0
@@ -695,9 +811,10 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         local isSliderDragging = false
 
         local function applyVal(val: number, fromConfig: boolean?)
+            val = tonumber(val) or safeDefault
             val = math.clamp(val, minVal, maxVal)
             val = math.round(val / step) * step
-            local ratio = math.clamp((val - minVal) / (maxVal - minVal), 0, 1)
+            local ratio = math.clamp((val - minVal) / span, 0, 1)
             progress.Size = UDim2.new(ratio, 0, 1, 0)
             inputBox.Text = string.format(step < 1 and "%.2f" or "%d", val)
             if not fromConfig then
@@ -710,7 +827,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
             if num then
                 applyVal(num)
             else
-                inputBox.Text = string.format(step < 1 and "%.2f" or "%d", SimConfig.Get(configKey) or defaultVal)
+                local fallback = tonumber(SimConfig.Get(configKey)) or safeDefault
+                inputBox.Text = string.format(step < 1 and "%.2f" or "%d", fallback)
             end
         end)
 
@@ -1119,11 +1237,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- Funcao publica para atualizar os dados de telemetria
     function DashboardGUI:UpdateTelemetryDisplay(data: any)
         if not data then return end
-        teleVel.Text = string.format("VELOCIDADE ANGULAR: %.1f °/s", data.angularVelocity or 0)
+        local angVel = tonumber(data.angularVelocity) or 0
+        teleVel.Text = string.format("VELOCIDADE ANGULAR: %.1f °/s", angVel)
         teleObs.Text = string.format("LINHA DE VISÃO: %s", data.isObstructed and "OBSTRUÍDO (PAREDE)" or "LIVRE")
         teleObs.TextColor3 = data.isObstructed and Color3.fromRGB(240, 80, 80) or THEME.SUCCESS
-        teleMode.Text = string.format("MODO: %s", data.mode or "IDLE")
-        local fps = math.floor(1 / ((RunService.RenderStepped:Wait()) or 0.016))
+        teleMode.Text = string.format("MODO: %s", tostring(data.mode or "IDLE"))
+        local dt = tonumber(data.dt) or 0.016
+        local fps = math.floor(1 / math.max(dt, 0.001))
         teleFps.Text = string.format("STATUS DO ENGINE: %d FPS", fps)
     end
 

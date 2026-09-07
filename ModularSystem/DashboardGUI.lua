@@ -211,6 +211,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         Componente de Slider com Input Numerico Sincronizado
     --]]
     local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number): Frame
+        minVal = tonumber(minVal) or 0
+        maxVal = tonumber(maxVal) or 100
+        step = tonumber(step) or 1
+        if step <= 0 then step = 1 end
+        local safeDefault = tonumber(defaultVal) or tonumber(SimConfig.Get(configKey)) or minVal
+        local span = math.max(maxVal - minVal, 0.0001)
+
         local container = Instance.new("Frame")
         container.Size = UDim2.new(1, 0, 0, 44)
         container.BackgroundTransparency = 1
@@ -237,7 +244,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         inputBox.TextColor3 = THEME.ACCENT_RED
         inputBox.Font = Enum.Font.GothamBold
         inputBox.TextSize = 11
-        inputBox.Text = string.format(step < 1 and "%.2f" or "%d", defaultVal)
+        inputBox.Text = string.format(step < 1 and "%.2f" or "%d", safeDefault)
         inputBox.ClearTextOnFocus = false
         inputBox.Parent = headerRow
         AddCorner(inputBox, 4)
@@ -251,7 +258,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         AddCorner(track, 3)
 
         local progress = Instance.new("Frame")
-        local initialRatio = math.clamp((defaultVal - minVal) / (maxVal - minVal), 0, 1)
+        local initialRatio = math.clamp((safeDefault - minVal) / span, 0, 1)
         progress.Size = UDim2.new(initialRatio, 0, 1, 0)
         progress.BackgroundColor3 = THEME.ACCENT_RED
         progress.BorderSizePixel = 0
@@ -269,9 +276,10 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         local isSliderDragging = false
 
         local function applyVal(val: number, fromConfig: boolean?)
+            val = tonumber(val) or safeDefault
             val = math.clamp(val, minVal, maxVal)
             val = math.round(val / step) * step
-            local ratio = math.clamp((val - minVal) / (maxVal - minVal), 0, 1)
+            local ratio = math.clamp((val - minVal) / span, 0, 1)
             progress.Size = UDim2.new(ratio, 0, 1, 0)
             inputBox.Text = string.format(step < 1 and "%.2f" or "%d", val)
             if not fromConfig then
@@ -284,7 +292,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
             if num then
                 applyVal(num)
             else
-                inputBox.Text = string.format(step < 1 and "%.2f" or "%d", SimConfig.Get(configKey) or defaultVal)
+                local fallback = tonumber(SimConfig.Get(configKey)) or safeDefault
+                inputBox.Text = string.format(step < 1 and "%.2f" or "%d", fallback)
             end
         end)
 
@@ -693,11 +702,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- Funcao publica para atualizar os dados de telemetria
     function DashboardGUI:UpdateTelemetryDisplay(data: any)
         if not data then return end
-        teleVel.Text = string.format("VELOCIDADE ANGULAR: %.1f °/s", data.angularVelocity or 0)
+        local angVel = tonumber(data.angularVelocity) or 0
+        teleVel.Text = string.format("VELOCIDADE ANGULAR: %.1f °/s", angVel)
         teleObs.Text = string.format("LINHA DE VISÃO: %s", data.isObstructed and "OBSTRUÍDO (PAREDE)" or "LIVRE")
         teleObs.TextColor3 = data.isObstructed and Color3.fromRGB(240, 80, 80) or THEME.SUCCESS
-        teleMode.Text = string.format("MODO: %s", data.mode or "IDLE")
-        local fps = math.floor(1 / ((RunService.RenderStepped:Wait()) or 0.016))
+        teleMode.Text = string.format("MODO: %s", tostring(data.mode or "IDLE"))
+        local dt = tonumber(data.dt) or 0.016
+        local fps = math.floor(1 / math.max(dt, 0.001))
         teleFps.Text = string.format("STATUS DO ENGINE: %d FPS", fps)
     end
 
