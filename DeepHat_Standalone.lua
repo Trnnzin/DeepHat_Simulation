@@ -1,7 +1,12 @@
-﻿--!strict
+--!strict
 -- DeepHat_Standalone.lua
--- Versao Unificada (Single-File) para Execucao Remota via HttpGet / loadstring
--- Evita erros de "script.Parent" e nao depende de multiplas requisicoes HTTP
+-- Versao Otimizada (High-Performance Single-File) para Execucao Remota via HttpGet / loadstring
+-- Melhorias: Throttling de UI (zero lag), Raycast otimizado, Drag suave moderno e Garbage Collection reduzido.
+
+-- Limpeza de instancia anterior caso re-executado
+if _G.DeepHat_Cleanup then
+    pcall(_G.DeepHat_Cleanup)
+end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -13,7 +18,7 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 -- =========================================================================
--- [1/3] MODULO: SimConfig
+-- [1/3] MODULO: SimConfig (Central de Parametros + Observer Pattern)
 -- =========================================================================
 local SimConfig = {}
 do
@@ -85,7 +90,7 @@ do
 end
 
 -- =========================================================================
--- [2/3] MODULO: AdvancedKinematics
+-- [2/3] MODULO: AdvancedKinematics (Motor Fisico de Alta Performance)
 -- =========================================================================
 local AdvancedKinematics = {}
 AdvancedKinematics.__index = AdvancedKinematics
@@ -121,9 +126,8 @@ do
 
     function AdvancedKinematics:CheckObstruction(fromPos: Vector3, toPos: Vector3): boolean
         local dir = (toPos - fromPos)
-        local dist = dir.Magnitude
-        if dist < 0.05 then return false end
-        return (workspace:Raycast(fromPos, dir.Unit * dist, self.RayParams) ~= nil)
+        if dir.Magnitude < 0.05 then return false end
+        return (workspace:Raycast(fromPos, dir, self.RayParams) ~= nil)
     end
 
     function AdvancedKinematics:StepSnap(targetPosition: Vector3, dt: number)
@@ -165,6 +169,7 @@ do
         if angularErrorDeg > fov then
             self.CachedTelemetry.angularVelocity = 0
             self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
+            self.CachedTelemetry.position = eyePos
             self.CachedTelemetry.cframe = self.CurrentCFrame
             self.CachedTelemetry.mode = "SMOOTH"
             self.CachedTelemetry.angularErrorDeg = angularErrorDeg
@@ -202,7 +207,7 @@ do
 end
 
 -- =========================================================================
--- [3/3] MODULO: DashboardGUI
+-- [3/3] MODULO: DashboardGUI (Interface Dark Mode Moderna & Drag Estavel)
 -- =========================================================================
 local DashboardGUI = {}
 do
@@ -229,7 +234,6 @@ do
     function DashboardGUI.Create()
         local hostParent = (RunService:IsStudio() and LocalPlayer:WaitForChild("PlayerGui") or CoreGuiService)
 
-        -- Se ja houver uma GUI anterior, remove
         local existing = hostParent:FindFirstChild("KinematicsSimulationDashboard")
         if existing then existing:Destroy() end
 
@@ -246,7 +250,6 @@ do
         mainFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
         mainFrame.BorderSizePixel = 0
         mainFrame.Active = true
-        mainFrame.Draggable = true
         mainFrame.Parent = screenGui
         AddCorner(mainFrame, 10)
         AddStroke(mainFrame, Color3.fromRGB(38, 42, 54), 1.5)
@@ -269,6 +272,36 @@ do
         titleLabel.TextXAlignment = Enum.TextXAlignment.Left
         titleLabel.Parent = header
 
+        local draggingWindow = false
+        local dragStartPos = Vector2.zero
+        local startFramePos = UDim2.new()
+
+        header.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                draggingWindow = true
+                dragStartPos = Vector2.new(input.Position.X, input.Position.Y)
+                startFramePos = mainFrame.Position
+
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        draggingWindow = false
+                    end
+                end)
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if draggingWindow and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStartPos
+                mainFrame.Position = UDim2.new(
+                    startFramePos.X.Scale,
+                    startFramePos.X.Offset + delta.X,
+                    startFramePos.Y.Scale,
+                    startFramePos.Y.Offset + delta.Y
+                )
+            end
+        end)
+
         local contentScroll = Instance.new("ScrollingFrame")
         contentScroll.Size = UDim2.new(1, -24, 1, -60)
         contentScroll.Position = UDim2.new(0, 12, 0, 52)
@@ -284,7 +317,6 @@ do
         listLayout.SortOrder = Enum.SortOrder.LayoutOrder
         listLayout.Parent = contentScroll
 
-        -- Perfis
         local profileContainer = Instance.new("Frame")
         profileContainer.Size = UDim2.new(1, 0, 0, 32)
         profileContainer.BackgroundTransparency = 1
@@ -329,7 +361,6 @@ do
         end
         UpdateProfileHighlights(SimConfig.Get("ActiveProfile") or "Normal")
 
-        -- Inputs
         local paramsContainer = Instance.new("Frame")
         paramsContainer.Size = UDim2.new(1, 0, 0, 170)
         paramsContainer.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
@@ -380,7 +411,11 @@ do
 
             box.FocusLost:Connect(function()
                 local num = tonumber(box.Text)
-                if num then SimConfig.Set(configKey, num) else box.Text = string.format("%." .. decimals .. "f", SimConfig.Get(configKey) or 0) end
+                if num then
+                    SimConfig.Set(configKey, num)
+                else
+                    box.Text = string.format("%." .. decimals .. "f", SimConfig.Get(configKey) or 0)
+                end
             end)
             textInputs[configKey] = box
         end
@@ -390,7 +425,6 @@ do
         CreateInput("Mult. Velocidade:", "SpeedMultiplier", 2)
         CreateInput("Tempo de Reacao (s):", "ReactionTime", 2)
 
-        -- Sliders
         local slidersContainer = Instance.new("Frame")
         slidersContainer.Size = UDim2.new(1, 0, 0, 115)
         slidersContainer.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
@@ -408,6 +442,8 @@ do
         sPad.PaddingLeft = UDim.new(0, 10)
         sPad.PaddingRight = UDim.new(0, 10)
         sPad.Parent = slidersContainer
+
+        local currentlyActiveSlider = nil
 
         local function CreateSlider(title: string, configKey: string, minVal: number, maxVal: number)
             local container = Instance.new("Frame")
@@ -458,9 +494,11 @@ do
             fill.Parent = track
             AddCorner(fill, 4)
 
-            local isDragging = false
             local function UpdateX(xPos: number)
-                local ratio = math.clamp((xPos - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+                local trackX = track.AbsolutePosition.X
+                local trackW = track.AbsoluteSize.X
+                if trackW <= 0 then return end
+                local ratio = math.clamp((xPos - trackX) / trackW, 0, 1)
                 local val = minVal + ratio * (maxVal - minVal)
                 fill.Size = UDim2.new(ratio, 0, 1, 0)
                 valLabel.Text = string.format("%.2f", val)
@@ -468,17 +506,24 @@ do
             end
 
             track.MouseButton1Down:Connect(function()
-                isDragging = true
+                currentlyActiveSlider = configKey
                 UpdateX(UserInputService:GetMouseLocation().X)
             end)
+
             UserInputService.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    if currentlyActiveSlider == configKey then
+                        currentlyActiveSlider = nil
+                    end
+                end
             end)
+
             UserInputService.InputChanged:Connect(function(input)
-                if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                if currentlyActiveSlider == configKey and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                     UpdateX(input.Position.X)
                 end
             end)
+
             SimConfig.Subscribe(configKey, function(newVal)
                 local ratio = math.clamp((newVal - minVal) / (maxVal - minVal), 0, 1)
                 fill.Size = UDim2.new(ratio, 0, 1, 0)
@@ -489,7 +534,6 @@ do
         CreateSlider("Intensidade:", "Intensity", 0.1, 2.0)
         CreateSlider("Precisao:", "TrackingPrecision", 0.50, 1.00)
 
-        -- Acoes
         local actionsContainer = Instance.new("Frame")
         actionsContainer.Size = UDim2.new(1, 0, 0, 85)
         actionsContainer.BackgroundTransparency = 1
@@ -526,7 +570,6 @@ do
             if DashboardGUI.OnResetRequested then DashboardGUI.OnResetRequested() end
         end)
 
-        -- Telemetria
         local telemetryCard = Instance.new("Frame")
         telemetryCard.Size = UDim2.new(1, 0, 0, 90)
         telemetryCard.BackgroundColor3 = Color3.fromRGB(22, 25, 34)
@@ -584,11 +627,15 @@ do
 end
 
 -- =========================================================================
--- [ORQUESTRADOR] EXECUCAO
+-- [ORQUESTRADOR] EXECUCAO OTIMIZADA
 -- =========================================================================
-DashboardGUI.Create()
+local guiInstance = DashboardGUI.Create()
 
-local filterInstances: { Instance } = { LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait() }
+local filterInstances: { Instance } = {}
+if LocalPlayer.Character then
+    table.insert(filterInstances, LocalPlayer.Character)
+end
+
 local Kinematics = AdvancedKinematics.new(Camera.CFrame, filterInstances)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
@@ -600,22 +647,39 @@ end)
 local isRunning = false
 local conn: RBXScriptConnection? = nil
 local lastSnapTime = 0
+local lastUiUpdate = 0
 
 local function GetTarget(): Vector3
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+    local myPos = myRoot and myRoot.Position or Camera.CFrame.Position
+
+    local closestPlayerDist = math.huge
+    local targetPos: Vector3? = nil
+
     for _, other in ipairs(Players:GetPlayers()) do
         if other ~= LocalPlayer and other.Character and other.Character:FindFirstChild("HumanoidRootPart") then
-            return (other.Character.HumanoidRootPart :: BasePart).Position
+            local hrp = other.Character.HumanoidRootPart :: BasePart
+            local d = (hrp.Position - myPos).Magnitude
+            if d < closestPlayerDist then
+                closestPlayerDist = d
+                targetPos = hrp.Position
+            end
         end
     end
-    local t = os.clock() * 0.8
-    local center = Camera.CFrame.Position + Camera.CFrame.LookVector * 25
-    return center + Vector3.new(math.sin(t) * 12, math.cos(t * 1.5) * 4, math.cos(t) * 12)
+
+    if targetPos then
+        return targetPos
+    end
+
+    local t = os.clock() * 0.9
+    local center = myPos + Vector3.new(0, 3, 0)
+    return center + Vector3.new(math.sin(t) * 16, math.sin(t * 0.7) * 2, math.cos(t) * 16)
 end
 
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat] Simulador INICIADO via loadstring!")
+    print("[DeepHat] Simulador INICIADO!")
 
     conn = RunService.RenderStepped:Connect(function(dt)
         local target = GetTarget()
@@ -632,20 +696,37 @@ DashboardGUI.OnStartRequested = function()
         end
 
         Camera.CFrame = telem.cframe
-        DashboardGUI:UpdateTelemetryDisplay(telem)
+
+        if (now - lastUiUpdate) >= 0.1 then
+            lastUiUpdate = now
+            DashboardGUI:UpdateTelemetryDisplay(telem)
+        end
     end)
 end
 
 DashboardGUI.OnStopRequested = function()
     if not isRunning then return end
     isRunning = false
-    if conn then conn:Disconnect(); conn = nil end
+    if conn then
+        conn:Disconnect()
+        conn = nil
+    end
     print("[DeepHat] Simulador PARADO!")
     DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO" })
 end
 
 DashboardGUI.OnResetRequested = function()
-    print("[DeepHat] Resetado!")
+    print("[DeepHat] Parametros resetados para Normal!")
 end
 
-print("[DeepHat] Sistema carregado com sucesso em arquivo unico!")
+_G.DeepHat_Cleanup = function()
+    if conn then
+        conn:Disconnect()
+        conn = nil
+    end
+    if guiInstance and guiInstance.Parent then
+        guiInstance:Destroy()
+    end
+end
+
+print("[DeepHat] Sistema v2.0 OTIMIZADO carregado com sucesso!")
