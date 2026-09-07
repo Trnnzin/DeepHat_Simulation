@@ -419,8 +419,29 @@ do
         return stroke
     end
 
+    local function GetSafeGuiParent(): Instance
+        -- Tenta CoreGui primeiro (para executores normais)
+        local ok, coreGui = pcall(function()
+            return game:GetService("CoreGui")
+        end)
+        if ok and coreGui then
+            local testOk = pcall(function()
+                local test = Instance.new("Folder")
+                test.Parent = coreGui
+                test:Destroy()
+            end)
+            if testOk then return coreGui end
+        end
+
+        -- Fallback seguro para PlayerGui (Roblox Studio ou sem permissao CoreGui)
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+        if playerGui then return playerGui end
+
+        return CoreGuiService
+    end
+
     function DashboardGUI.Create()
-        local hostParent = (RunService:IsStudio() and LocalPlayer:WaitForChild("PlayerGui") or CoreGuiService)
+        local hostParent = GetSafeGuiParent()
 
         local existing = hostParent:FindFirstChild("KinematicsSimulationDashboard")
         if existing then existing:Destroy() end
@@ -1189,3 +1210,13 @@ Players.PlayerRemoving:Connect(function(plr)
 end)
 
 print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [RShift] para abrir/fechar.")
+
+
+-- Notificacao no chat / console para confirmar carregamento
+pcall(function()
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "DeepHat v4.0 Ativado",
+        Text = "Pressione [RightShift] para abrir/fechar o menu!",
+        Duration = 5
+    })
+end)
