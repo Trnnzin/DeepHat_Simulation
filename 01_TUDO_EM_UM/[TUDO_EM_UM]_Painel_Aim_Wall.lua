@@ -513,7 +513,7 @@ do
         minimizeHint.Size = UDim2.new(0, 60, 1, 0)
         minimizeHint.Position = UDim2.new(1, -68, 0, 0)
         minimizeHint.BackgroundTransparency = 1
-        minimizeHint.Text = "[RShift]"
+        minimizeHint.Text = "[Home]"
         minimizeHint.TextColor3 = Color3.fromRGB(120, 126, 140)
         minimizeHint.Font = Enum.Font.GothamMedium
         minimizeHint.TextSize = 10
@@ -523,7 +523,7 @@ do
         local isGuiVisible = true
         UserInputService.InputBegan:Connect(function(input, gpe)
             if gpe then return end
-            if input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then
+            if input.KeyCode == Enum.KeyCode.Home or input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then
                 isGuiVisible = not isGuiVisible
                 mainFrame.Visible = isGuiVisible
             end
@@ -1209,14 +1209,14 @@ Players.PlayerRemoving:Connect(function(plr)
     targetLastPosCache[plr] = nil
 end)
 
-print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [RShift] para abrir/fechar.")
+print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [HOME] para abrir/fechar.")
 
 
 -- Notificacao no chat / console para confirmar carregamento
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "DeepHat v4.0 Ativado",
-        Text = "Pressione [RightShift] para abrir/fechar o menu!",
+        Text = "Pressione a tecla [HOME] para abrir/fechar o menu!",
         Duration = 5
     })
 end)
