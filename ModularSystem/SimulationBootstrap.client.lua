@@ -1,3 +1,4 @@
+local lastUiUpdate = 0
 ﻿--!strict
 -- SimulationBootstrap.client.lua
 -- Orquestrador Principal: Integra SimConfig, AdvancedKinematics e DashboardGUI
@@ -72,8 +73,11 @@ DashboardGUI.OnStartRequested = function()
         -- Aplica a orientacao calculada na camera virtual
         Camera.CFrame = telemetry.cframe
 
-        -- Envia telemetria atualizada para a interface (sem acoplamento direto)
-        DashboardGUI:UpdateTelemetryDisplay(telemetry)
+        -- Otimizacao: Atualiza telemetria da UI a 10 Hz (evita queda de FPS)
+        if (now - lastUiUpdate) >= 0.1 then
+            lastUiUpdate = now
+            DashboardGUI:UpdateTelemetryDisplay(telemetry)
+        end
     end)
 end
 
