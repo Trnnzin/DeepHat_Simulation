@@ -16,13 +16,12 @@ export type TelemetryData = {
     angularErrorDeg: number     -- Desvio angular em relacao ao centro do alvo
 }
 
--- Curva de Aceleracao Sigmoide / Hermite Cúbico (Ease-In / Ease-Out)
+-- Curva de Aceleracao Sigmoide / Hermite Cubico (Ease-In / Ease-Out)
 local function Smoothstep(x: number): number
     local clamped = math.clamp(x, 0.0, 1.0)
     return clamped * clamped * (3.0 - 2.0 * clamped)
 end
 
--- Construtor do modulo de cinematica
 function AdvancedKinematics.new(initialCFrame: CFrame?, filterInstances: { Instance }?)
     local self = setmetatable({}, AdvancedKinematics)
 
@@ -30,14 +29,12 @@ function AdvancedKinematics.new(initialCFrame: CFrame?, filterInstances: { Insta
     self.PreviousLookVector = self.CurrentCFrame.LookVector
     self.NoiseSeed = math.random(1000, 9999)
 
-    -- Otimizacao de Performance: RaycastParams reutilizavel (evita GC excessivo)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = filterInstances or {}
     rayParams.IgnoreWater = true
     self.RayParams = rayParams
 
-    -- Tabela de telemetria pre-alocada para reciclagem
     self.CachedTelemetry = {
         angularVelocity = 0,
         isObstructed = false,
@@ -50,12 +47,10 @@ function AdvancedKinematics.new(initialCFrame: CFrame?, filterInstances: { Insta
     return self
 end
 
--- Define filtros de colisao para o raycast de obstrucao
 function AdvancedKinematics:SetFilterInstances(instances: { Instance })
     self.RayParams.FilterDescendantsInstances = instances
 end
 
--- Verifica se a linha de visao esta bloqueada por geometria (Line of Sight Check)
 function AdvancedKinematics:CheckObstruction(fromPos: Vector3, toPos: Vector3): boolean
     local dir = (toPos - fromPos)
     local dist = dir.Magnitude
@@ -67,8 +62,12 @@ function AdvancedKinematics:CheckObstruction(fromPos: Vector3, toPos: Vector3): 
     return (raycastResult ~= nil)
 end
 
--- Metodo 1: StepSnap (Movimento Instantaneo - gera pico de velocidade angular)
 function AdvancedKinematics:StepSnap(targetPosition: Vector3, dt: number): TelemetryData
+    local camera = workspace.CurrentCamera
+    if camera then
+        self.CurrentCFrame = camera.CFrame
+    end
+
     local eyePos = self.CurrentCFrame.Position
     local toTarget = (targetPosition - eyePos)
     local dist = toTarget.Magnitude
@@ -86,18 +85,14 @@ function AdvancedKinematics:StepSnap(targetPosition: Vector3, dt: number): Telem
     local dirToTarget = toTarget.Unit
     local targetRotation = CFrame.lookAt(eyePos, targetPosition)
 
-    -- Calcula o desvio angular antes do snap
     local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
     local angularErrorDeg = math.deg(math.acos(dot))
 
-    -- Atualiza a orientacao instantaneamente (0 frames de interpolacao)
     self.CurrentCFrame = targetRotation
 
-    -- Calculo de velocidade angular instantanea (Pico de Aceleração)
     local safeDt = (dt and dt > 0) and dt or 0.0166
     local peakAngularVel = angularErrorDeg / safeDt
 
-    -- Telemetria de obstrucao geométrica
     local isObstructed = self:CheckObstruction(eyePos, targetPosition)
     self.PreviousLookVector = self.CurrentCFrame.LookVector
 
@@ -111,8 +106,12 @@ function AdvancedKinematics:StepSnap(targetPosition: Vector3, dt: number): Telem
     return self.CachedTelemetry
 end
 
--- Metodo 2: StepSmooth (Tracking com Curva Ease-In/Ease-Out e Micro-Oscilacoes Perlin)
 function AdvancedKinematics:StepSmooth(targetPosition: Vector3, dt: number): TelemetryData
+    local camera = workspace.CurrentCamera
+    if camera then
+        self.CurrentCFrame = camera.CFrame
+    end
+
     local eyePos = self.CurrentCFrame.Position
     local toTarget = (targetPosition - eyePos)
     local dist = toTarget.Magnitude
@@ -130,44 +129,43 @@ function AdvancedKinematics:StepSmooth(targetPosition: Vector3, dt: number): Tel
     local dirToTarget = toTarget.Unit
     local currentLook = self.CurrentCFrame.LookVector
 
-    -- Calculo do desvio angular
     local dot = math.clamp(currentLook:Dot(dirToTarget), -1.0, 1.0)
     local angularErrorDeg = math.deg(math.acos(dot))
 
-    -- Resgate de parametros centralizados no SimConfig
-    local fov = SimConfig.Get("FOV") or 45.0
-    local baseSmoothing = SimConfig.Get("Smoothing") or 0.14
-    local speedMult = SimConfig.Get("SpeedMultiplier") or 1.0
-    local precision = SimConfig.Get("TrackingPrecision") or 0.95
-    local intensity = SimConfig.Get("Intensity") or 1.0
+    local fov = SimConfig.Get("FOV") or 60.0
+    local baseSmoothing = SimConfig.Get("Smoothing") or 0.15
+    local speedMult = SimConfig.Get("MoveSpeed") and (SimConfig.Get("MoveSpeed") / 16.0) or 1.0
+    local precision = (SimConfig.Get("TrajectoryPrecision") or 98.5) / 100.0
+    local intensity = (SimConfig.Get("Intensity") or 75.0) / 100.0
+    local maxRadius = SimConfig.Get("VectorRadius") or 150.0
 
-    -- Se fora do FOV maximo, mantem orientacao e nao rastreia
-    if angularErrorDeg > fov then
+    -- Se fora do raio maximo de atuacao ou fora do FOV, nao rotaciona
+    if dist > maxRadius or angularErrorDeg > fov then
         self.CachedTelemetry.angularVelocity = 0
         self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
         self.CachedTelemetry.position = eyePos
         self.CachedTelemetry.cframe = self.CurrentCFrame
-        self.CachedTelemetry.mode = "SMOOTH"
+        self.CachedTelemetry.mode = "IDLE"
         self.CachedTelemetry.angularErrorDeg = angularErrorDeg
         return self.CachedTelemetry
     end
 
-    -- Curva de Aceleracao Nao-Linear (Ease-In / Ease-Out)
+    -- Curva de Aceleracao Nao-Linear
     local normalizedErr = math.clamp(angularErrorDeg / fov, 0.0, 1.0)
-    local accelerationFactor = Smoothstep(normalizedErr)
+    local accelExponent = SimConfig.Get("AccelerationCurve") or 1.25
+    local accelerationFactor = math.pow(Smoothstep(normalizedErr), accelExponent)
 
-    -- Modulacao da taxa de interpolacao (Alpha Dinamico)
+    -- Interpolacao frame-rate independent
     local dynamicAlpha = baseSmoothing * speedMult * (0.35 + 0.65 * accelerationFactor)
     dynamicAlpha = math.clamp(dynamicAlpha, 0.005, 1.0)
 
-    -- Interpolacao base de orientacao
     local idealTargetRotation = CFrame.lookAt(eyePos, targetPosition)
     local smoothedRotation = self.CurrentCFrame:Lerp(idealTargetRotation, dynamicAlpha)
 
-    -- Injecao de Ruido de Baixa Frequencia (Perlin Noise) para jitter organico
+    -- Insercao de Micro-Oscilacoes (Jitter Organico via Perlin Noise)
     local now = os.clock()
-    local jitterAmplitude = (1.0 - precision) * intensity * 0.8 -- amplitude em graus
-    local noiseFrequency = 3.2 * intensity
+    local jitterAmplitude = (1.0 - precision) * intensity * 0.75
+    local noiseFrequency = 3.2 * (SimConfig.Get("EventFrequency") or 20) / 20
 
     local sampleX = math.noise(now * noiseFrequency, self.NoiseSeed, 0.5)
     local sampleY = math.noise(now * noiseFrequency, self.NoiseSeed + 100, 0.5)
@@ -178,7 +176,6 @@ function AdvancedKinematics:StepSmooth(targetPosition: Vector3, dt: number): Tel
     local noiseRotation = CFrame.Angles(pitchJitterRad, yawJitterRad, 0)
     self.CurrentCFrame = smoothedRotation * noiseRotation
 
-    -- Calculo da velocidade angular resultante
     local newLook = self.CurrentCFrame.LookVector
     local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
     local deltaAngleDeg = math.deg(math.acos(deltaDot))
@@ -186,7 +183,6 @@ function AdvancedKinematics:StepSmooth(targetPosition: Vector3, dt: number): Tel
     local angularVelocity = deltaAngleDeg / safeDt
     self.PreviousLookVector = newLook
 
-    -- Verificacao de linha de visao
     local isObstructed = self:CheckObstruction(eyePos, targetPosition)
 
     self.CachedTelemetry.angularVelocity = angularVelocity

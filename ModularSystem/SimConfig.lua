@@ -1,97 +1,157 @@
 ﻿--!strict
 -- SimConfig.lua
 -- Modulo 1: Gerenciador Central de Configuracoes com Observer Pattern
+-- Suporta todos os parametros de Vetores, Comportamento e Mapeamento de Regioes
 
 local SimConfig = {}
 SimConfig.__index = SimConfig
 
 export type ProfileData = {
-    FOV: number,                -- Campo de visao angular util (em graus)
-    Smoothing: number,          -- Coeficiente de interpolacao base [0.01 - 0.5]
-    SpeedMultiplier: number,    -- Multiplicador geral de velocidade cinetica
-    TrackingPrecision: number,  -- Precisao [0.50 - 1.00] (afeta o nivel de jitter)
-    SnapFrequency: number,      -- Frequencia/probabilidade de movimentos bruscos [0.0 - 1.0]
-    ReactionTime: number,       -- Latencia de resposta simulada (em segundos)
-    Intensity: number,          -- Escala geral de intensidade do teste [0.1 - 2.0]
-    ActiveProfile: string       -- Nome do perfil ativo
+    -- Coluna 1: Vetores e Direcao
+    SimulationActive: boolean,
+    FOV: number,                -- Campo de visao angular util (em graus) [10 - 180]
+    Smoothing: number,          -- Coeficiente de interpolacao base [0.01 - 1.0]
+    AngularVelocity: number,    -- Velocidade angular maxima (graus/segundo) [30 - 720]
+    ResponseTime: number,       -- Tempo de resposta simulado (em ms) [0 - 250]
+    TrajectoryPrecision: number,-- Precisao da trajetoria [50.0 - 100.0%]
+    UpdateFrequency: number,    -- Frequencia de atualizacao (Hz) [10 - 144]
+    VectorRadius: number,       -- Raio maximo de atuacao do vetor (em studs/m) [10 - 500]
+
+    -- Coluna 2: Comportamento do Sistema
+    ActiveProfile: string,      -- "Normal", "Leve", "Medio", "Agressivo", "Custom"
+    EventFrequency: number,     -- Frequencia de geracao de eventos (Hz) [1 - 60]
+    Intensity: number,          -- Intensidade geral da resposta [0 - 100%]
+    MoveSpeed: number,          -- Velocidade de deslocamento (studs/s) [8 - 40]
+    AccelerationCurve: number,  -- Gradiente de aceleracao / Easing exponent [0.2 - 3.0]
+    CycleDuration: number,      -- Duracao do ciclo de teste (segundos) [5 - 120]
+    SimulatedAgents: number,    -- Numero de agentes simulados concorrentes [1 - 16]
+
+    -- Coluna 3: Mapeamento de Regioes
+    TargetRegion: string,       -- "Head", "Torso", "Arms", "Legs"
 }
 
 -- Banco de perfis predefinidos
 local PROFILES: { [string]: ProfileData } = {
     ["Normal"] = {
-        FOV = 45.0,
-        Smoothing = 0.14,
-        SpeedMultiplier = 1.0,
-        TrackingPrecision = 0.95,
-        SnapFrequency = 0.03,
-        ReactionTime = 0.22,
-        Intensity = 1.0,
-        ActiveProfile = "Normal"
+        SimulationActive = false,
+        FOV = 60.0,
+        Smoothing = 0.15,
+        AngularVelocity = 180.0,
+        ResponseTime = 16,
+        TrajectoryPrecision = 98.5,
+        UpdateFrequency = 60,
+        VectorRadius = 150.0,
+        ActiveProfile = "Normal",
+        EventFrequency = 20,
+        Intensity = 75,
+        MoveSpeed = 16.0,
+        AccelerationCurve = 1.25,
+        CycleDuration = 30,
+        SimulatedAgents = 4,
+        TargetRegion = "Head"
     },
     ["Leve"] = {
-        FOV = 30.0,
-        Smoothing = 0.25,
-        SpeedMultiplier = 0.75,
-        TrackingPrecision = 0.98,
-        SnapFrequency = 0.00,
-        ReactionTime = 0.28,
-        Intensity = 0.6,
-        ActiveProfile = "Leve"
+        SimulationActive = false,
+        FOV = 40.0,
+        Smoothing = 0.28,
+        AngularVelocity = 120.0,
+        ResponseTime = 30,
+        TrajectoryPrecision = 95.0,
+        UpdateFrequency = 30,
+        VectorRadius = 100.0,
+        ActiveProfile = "Leve",
+        EventFrequency = 10,
+        Intensity = 40,
+        MoveSpeed = 12.0,
+        AccelerationCurve = 1.0,
+        CycleDuration = 20,
+        SimulatedAgents = 2,
+        TargetRegion = "Torso"
     },
     ["Medio"] = {
-        FOV = 60.0,
+        SimulationActive = false,
+        FOV = 75.0,
         Smoothing = 0.09,
-        SpeedMultiplier = 1.4,
-        TrackingPrecision = 0.90,
-        SnapFrequency = 0.15,
-        ReactionTime = 0.15,
-        Intensity = 1.3,
-        ActiveProfile = "Medio"
+        AngularVelocity = 280.0,
+        ResponseTime = 10,
+        TrajectoryPrecision = 90.0,
+        UpdateFrequency = 60,
+        VectorRadius = 200.0,
+        ActiveProfile = "Medio",
+        EventFrequency = 30,
+        Intensity = 85,
+        MoveSpeed = 22.0,
+        AccelerationCurve = 1.6,
+        CycleDuration = 45,
+        SimulatedAgents = 6,
+        TargetRegion = "Head"
     },
     ["Agressivo"] = {
-        FOV = 90.0,
+        SimulationActive = false,
+        FOV = 120.0,
         Smoothing = 0.02,
-        SpeedMultiplier = 2.2,
-        TrackingPrecision = 0.75,
-        SnapFrequency = 0.65,
-        ReactionTime = 0.05,
-        Intensity = 2.0,
-        ActiveProfile = "Agressivo"
+        AngularVelocity = 540.0,
+        ResponseTime = 2,
+        TrajectoryPrecision = 80.0,
+        UpdateFrequency = 120,
+        VectorRadius = 350.0,
+        ActiveProfile = "Agressivo",
+        EventFrequency = 50,
+        Intensity = 100,
+        MoveSpeed = 32.0,
+        AccelerationCurve = 2.4,
+        CycleDuration = 60,
+        SimulatedAgents = 10,
+        TargetRegion = "Head"
     },
     ["Custom"] = {
-        FOV = 45.0,
-        Smoothing = 0.14,
-        SpeedMultiplier = 1.0,
-        TrackingPrecision = 0.95,
-        SnapFrequency = 0.03,
-        ReactionTime = 0.20,
-        Intensity = 1.0,
-        ActiveProfile = "Custom"
+        SimulationActive = false,
+        FOV = 60.0,
+        Smoothing = 0.15,
+        AngularVelocity = 180.0,
+        ResponseTime = 16,
+        TrajectoryPrecision = 98.5,
+        UpdateFrequency = 60,
+        VectorRadius = 150.0,
+        ActiveProfile = "Custom",
+        EventFrequency = 20,
+        Intensity = 75,
+        MoveSpeed = 16.0,
+        AccelerationCurve = 1.25,
+        CycleDuration = 30,
+        SimulatedAgents = 4,
+        TargetRegion = "Head"
     }
 }
 
--- Estado inicial
+-- Estado inicial ativo
 local CurrentState: ProfileData = {
-    FOV = 45.0,
-    Smoothing = 0.14,
-    SpeedMultiplier = 1.0,
-    TrackingPrecision = 0.95,
-    SnapFrequency = 0.03,
-    ReactionTime = 0.22,
-    Intensity = 1.0,
-    ActiveProfile = "Normal"
+    SimulationActive = false,
+    FOV = 60.0,
+    Smoothing = 0.15,
+    AngularVelocity = 180.0,
+    ResponseTime = 16,
+    TrajectoryPrecision = 98.5,
+    UpdateFrequency = 60,
+    VectorRadius = 150.0,
+    ActiveProfile = "Normal",
+    EventFrequency = 20,
+    Intensity = 75,
+    MoveSpeed = 16.0,
+    AccelerationCurve = 1.25,
+    CycleDuration = 30,
+    SimulatedAgents = 4,
+    TargetRegion = "Head"
 }
 
--- Estrutura de observadores (Listeners)
+-- Observadores (Observer Pattern)
 local KeyListeners: { [string]: { (any) -> () } } = {}
 local GlobalListeners: { (string, any) -> () } = {}
 
--- Obtem o valor de uma chave
 function SimConfig.Get(key: string): any
     return (CurrentState :: any)[key]
 end
 
--- Obtem todas as configuracoes atuais (copia rasa)
 function SimConfig.GetAll(): ProfileData
     local clone: any = {}
     for k, v in pairs(CurrentState) do
@@ -100,7 +160,6 @@ function SimConfig.GetAll(): ProfileData
     return clone
 end
 
--- Define uma configuracao individual e notifica os observadores
 function SimConfig.Set(key: string, value: any, silent: boolean?)
     if (CurrentState :: any)[key] == value then
         return
@@ -109,7 +168,7 @@ function SimConfig.Set(key: string, value: any, silent: boolean?)
     (CurrentState :: any)[key] = value
 
     -- Se o usuario alterar um parametro individualmente sem selecionar perfil, muda para Custom
-    if key ~= "ActiveProfile" and CurrentState.ActiveProfile ~= "Custom" then
+    if key ~= "ActiveProfile" and key ~= "SimulationActive" and CurrentState.ActiveProfile ~= "Custom" then
         CurrentState.ActiveProfile = "Custom"
         SimConfig.Notify("ActiveProfile", "Custom")
     end
@@ -119,29 +178,24 @@ function SimConfig.Set(key: string, value: any, silent: boolean?)
     end
 end
 
--- Notifica observadores inscritos
 function SimConfig.Notify(key: string, value: any)
-    -- Dispara listeners especificos da chave
     if KeyListeners[key] then
         for _, callback in ipairs(KeyListeners[key]) do
             task.spawn(callback, value)
         end
     end
 
-    -- Dispara listeners globais
     for _, callback in ipairs(GlobalListeners) do
         task.spawn(callback, key, value)
     end
 end
 
--- Inscreve um observador para uma chave especifica
 function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
     if not KeyListeners[key] then
         KeyListeners[key] = {}
     end
     table.insert(KeyListeners[key], callback)
 
-    -- Retorna funcao de cancelamento (unsubscribe)
     return function()
         local list = KeyListeners[key]
         if not list then return end
@@ -152,7 +206,6 @@ function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
     end
 end
 
--- Inscreve um observador global que recebe qualquer mudanca
 function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
     table.insert(GlobalListeners, callback)
     return function()
@@ -163,7 +216,6 @@ function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
     end
 end
 
--- Carrega um perfil predefinido em bloco
 function SimConfig.LoadProfile(profileName: string)
     local profile = PROFILES[profileName]
     if not profile then
@@ -172,8 +224,10 @@ function SimConfig.LoadProfile(profileName: string)
     end
 
     for k, v in pairs(profile) do
-        (CurrentState :: any)[k] = v
-        SimConfig.Notify(k, v)
+        if k ~= "SimulationActive" then -- Preserva o estado de ativacao
+            (CurrentState :: any)[k] = v
+            SimConfig.Notify(k, v)
+        end
     end
 end
 

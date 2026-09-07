@@ -5,6 +5,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
@@ -14,7 +15,7 @@ local SimConfig = require(script.Parent.SimConfig)
 local AdvancedKinematics = require(script.Parent.AdvancedKinematics)
 local DashboardGUI = require(script.Parent.DashboardGUI)
 
--- Inicializacao da GUI
+-- Inicializacao da Interface
 DashboardGUI.Create()
 
 -- Inicializacao da Cinematica
@@ -27,80 +28,126 @@ LocalPlayer.CharacterAdded:Connect(function(char)
     KinematicsController:SetFilterInstances(filterInstances)
 end)
 
--- Estado do Teste
-local isSimulationRunning = false
-local simulationConnection: RBXScriptConnection? = nil
-local lastSnapTime = 0
 local lastUiUpdate = 0
+local lastSnapTime = 0
 
--- Funcao utilitaria para obter uma posicao alvo de teste
+--[[
+    Localizador de Parte/Osso de acordo com a regiao configurada no Dashboard
+--]]
+local function GetTargetPartFromCharacter(char: Model, region: string): BasePart?
+    if region == "Head" then
+        return (char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso")) :: BasePart?
+    elseif region == "Torso" then
+        return (char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")) :: BasePart?
+    elseif region == "Arms" then
+        return (char:FindFirstChild("RightUpperArm") or char:FindFirstChild("RightArm") or char:FindFirstChild("LeftUpperArm") or char:FindFirstChild("LeftArm") or char:FindFirstChild("HumanoidRootPart")) :: BasePart?
+    elseif region == "Legs" then
+        return (char:FindFirstChild("RightLowerLeg") or char:FindFirstChild("RightLeg") or char:FindFirstChild("LeftLowerLeg") or char:FindFirstChild("LeftLeg") or char:FindFirstChild("HumanoidRootPart")) :: BasePart?
+    end
+    return (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart) :: BasePart?
+end
+
+--[[
+    Obtem a posicao do alvo mais proximo do centro da tela ou gera um alvo virtual procedural
+--]]
 local function GetTargetPosition(): Vector3
+    local activeRegion = SimConfig.Get("TargetRegion") or "Head"
+    local maxRadius = SimConfig.Get("VectorRadius") or 150.0
+
+    local closestPos: Vector3? = nil
+    local closestDist = math.huge
+
     for _, other in ipairs(Players:GetPlayers()) do
-        if other ~= LocalPlayer and other.Character and other.Character:FindFirstChild("HumanoidRootPart") then
-            local hrp = other.Character.HumanoidRootPart :: BasePart
-            return hrp.Position
+        if other ~= LocalPlayer and other.Character and other.Character:FindFirstChild("Humanoid") then
+            local humanoid = other.Character.Humanoid :: Humanoid
+            if humanoid.Health > 0 then
+                local targetPart = GetTargetPartFromCharacter(other.Character, activeRegion)
+                if targetPart then
+                    local dist = (targetPart.Position - Camera.CFrame.Position).Magnitude
+                    if dist <= maxRadius and dist < closestDist then
+                        closestDist = dist
+                        closestPos = targetPart.Position
+                    end
+                end
+            end
         end
     end
 
-    -- Alvo procedural flutuante se estiver sozinho no mapa
-    local t = os.clock() * 0.8
-    local center = Camera.CFrame.Position + Camera.CFrame.LookVector * 25
-    return center + Vector3.new(math.sin(t) * 12, math.cos(t * 1.5) * 4, math.cos(t) * 12)
+    if closestPos then
+        return closestPos
+    end
+
+    -- Alvo procedural flutuante se estiver sozinho no mapa (Virtual Test Dummy)
+    local t = os.clock() * 0.75
+    local center = Camera.CFrame.Position + Camera.CFrame.LookVector * 24
+    return center + Vector3.new(math.sin(t) * 10, math.cos(t * 1.4) * 3.5, math.cos(t) * 10)
 end
 
--- Handlers dos Botoes da GUI (Arquitetura orientada a eventos)
-DashboardGUI.OnStartRequested = function()
-    if isSimulationRunning then return end
-    isSimulationRunning = true
-    print("[Simulador] Teste INICIADO com perfil:", SimConfig.Get("ActiveProfile"))
+-- Loop de renderizacao contínuo de alta frequencia
+RunService.RenderStepped:Connect(function(dt: number)
+    local success, err = pcall(function()
+        local isRunning = SimConfig.Get("SimulationActive")
+        local now = os.clock()
 
-    simulationConnection = RunService.RenderStepped:Connect(function(dt)
-        local success, err = pcall(function()
+        if isRunning then
             local targetPos = GetTargetPosition()
-            local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
-            local reactionTime = SimConfig.Get("ReactionTime") or 0.2
-            local now = os.clock()
+            local snapFreq = (SimConfig.Get("Intensity") or 75) > 85 and 0.15 or 0.02
+            local responseTimeSec = (SimConfig.Get("ResponseTime") or 16) / 1000.0
 
             local telemetry
-            -- Decide estocasticamente se gera um Snap abrupto ou um Smooth Tracking organico
-            if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
+            if math.random() < snapFreq and (now - lastSnapTime > responseTimeSec) then
                 lastSnapTime = now
                 telemetry = KinematicsController:StepSnap(targetPos, dt)
             else
                 telemetry = KinematicsController:StepSmooth(targetPos, dt)
             end
 
-            -- Aplica a orientacao calculada na camera virtual
+            -- Aplica orientacao calculada na camera do jogo
             Camera.CFrame = telemetry.cframe
 
-            -- Otimizacao: Atualiza telemetria da UI a 10 Hz (evita queda de FPS)
-            if (now - lastUiUpdate) >= 0.1 then
+            -- Atualiza display da UI a 15 Hz para zero perda de desempenho
+            if (now - lastUiUpdate) >= 0.066 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay(telemetry)
             end
-        end)
-
-        if not success then
-            warn("[SimulationBootstrap] Erro na atualizacao de frame: " .. tostring(err))
+        else
+            if (now - lastUiUpdate) >= 0.2 then
+                lastUiUpdate = now
+                DashboardGUI:UpdateTelemetryDisplay({
+                    angularVelocity = 0,
+                    isObstructed = false,
+                    mode = "PARADO"
+                })
+            end
         end
     end)
+
+    if not success then
+        warn("[SimulationBootstrap] Erro na atualizacao de frame: " .. tostring(err))
+    end
+end)
+
+-- Handlers dos Botoes da Barra Inferior
+DashboardGUI.OnStartRequested = function()
+    SimConfig.Set("SimulationActive", true)
+    print("[Simulador] Teste INICIADO // Perfil:", SimConfig.Get("ActiveProfile"), "// Regiao:", SimConfig.Get("TargetRegion"))
 end
 
 DashboardGUI.OnStopRequested = function()
-    if not isSimulationRunning then return end
-    isSimulationRunning = false
-    if simulationConnection then
-        simulationConnection:Disconnect()
-        simulationConnection = nil
-    end
-    print("[Simulador] Teste INTERROMPIDO")
-    DashboardGUI:UpdateTelemetryDisplay({
-        angularVelocity = 0,
-        isObstructed = false,
-        mode = "PARADO"
-    })
+    SimConfig.Set("SimulationActive", false)
+    print("[Simulador] Teste PARADO")
 end
 
 DashboardGUI.OnResetRequested = function()
-    print("[Simulador] Parametros resetados para o padrao Normal")
+    SimConfig.LoadProfile("Normal")
+    print("[Simulador] Parametros resetados para o perfil Normal")
 end
+
+DashboardGUI.OnSaveRequested = function()
+    local allConfig = SimConfig.GetAll()
+    local json = HttpService:JSONEncode(allConfig)
+    print("[Simulador] CONFIGURACOES SALVAS (JSON):")
+    print(json)
+end
+
+print("[System] Dashboard de Simulacao Inicializado com Sucesso.")
