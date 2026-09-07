@@ -1,0 +1,39 @@
+﻿===================================================================
+      GUIA DE TESTES DE DETECÇÃO DE COMBATE (FPS ANTI-CHEAT)
+===================================================================
+
+Arquivos criados na pasta:
+1. AimSimulator.client.lua      -> Simula Snap instantâneo e Tracking contínuo
+2. WallhackSimulator.client.lua -> Simula travamento de mira através de oclusão
+
+-------------------------------------------------------------------
+ONDE COLOCAR NO ROBLOX STUDIO:
+-------------------------------------------------------------------
+Como esses dois scripts manipulam a câmera local (workspace.CurrentCamera),
+eles devem rodar no lado do cliente:
+- Coloque dentro de 'StarterPlayerScripts' (StarterPlayer > StarterPlayerScripts)
+  como um 'LocalScript'.
+- Ou execute diretamente via Command Bar no modo Play (F5).
+
+-------------------------------------------------------------------
+COMO CALIBRAR O ANTI-CHEAT NO SERVIDOR (ServerScriptService):
+-------------------------------------------------------------------
+1. Teste de Snap (Aimbot Instantâneo):
+   - Configure AimType = "SNAP" no AimSimulator.
+   - Detecção: Calcule o ângulo entre a direção da câmera no frame anterior
+     e no frame atual. Variações angulares anômalas (ex: > 60 graus em um único
+     frame) indicam rotação artificial.
+
+2. Teste de Tracking (Aimbot Suave):
+   - Configure AimType = "SMOOTH" no AimSimulator.
+   - Detecção: Avalie o desvio padrão da aceleração angular ao longo de múltiplos
+     frames. Mira humana possui micro-correções e variações; bots exibem
+     curvas de interpolação excessivamente perfeitas.
+
+3. Teste de Visão (Oclusão / Wallhack):
+   - Posicione uma parede entre o personagem e a TargetPos.
+   - Ative o WallhackSimulator.
+   - Detecção: O servidor dispara um Raycast na direção onde o jogador disparou.
+     Se o jogador atirar repetidamente ou mantiver foco prolongado em alvos
+     sem linha de visão (Raycast retornando obstáculo sólido), o evento é descartado.
+===================================================================

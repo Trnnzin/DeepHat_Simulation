@@ -1,0 +1,28 @@
+﻿===================================================================
+               DEEPHAT SIMULATION ENGINE - COMPLETO
+===================================================================
+
+Estrutura dos Arquivos na Pasta:
+1. EngineCore.lua        -> ModuleScript (Configuração de Perfis e Cálculo de Suspeita)
+2. BehaviorSimulator.lua -> ModuleScript (Geração de Telemetria de Movimento, Mira e Visão)
+3. MainTestRunner.lua    -> Script (Executor principal que roda o benchmark no console)
+
+-------------------------------------------------------------------
+COMO EXECUTAR NO ROBLOX STUDIO:
+-------------------------------------------------------------------
+1. Abra seu jogo no Roblox Studio.
+2. Na janela Explorer (lado direito):
+   - Vá até 'ServerScriptService'.
+   - Clique com o botão direito > Insert Object > 'Folder' (renomeie para 'DeepHat').
+   
+3. Dentro da pasta 'DeepHat':
+   - Crie um ModuleScript com o nome: EngineCore
+     -> Cole o conteúdo de EngineCore.lua
+   - Crie um ModuleScript com o nome: BehaviorSimulator
+     -> Cole o conteúdo de BehaviorSimulator.lua
+   - Crie um Script normal com o nome: MainTestRunner
+     -> Cole o conteúdo de MainTestRunner.lua
+
+4. Aperte 'Play' (F5) ou 'Run' (F8) no Roblox Studio e abra a janela 'Output' (Exibir > Saída).
+   Você verá as iterações rodando e o resumo final comparando as médias de suspeita do jogador normal vs agressivo!
+===================================================================
