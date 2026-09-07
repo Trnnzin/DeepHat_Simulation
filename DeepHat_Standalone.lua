@@ -23,8 +23,17 @@ local function PurgeAllLegacyUIs()
         "KinematicsSimulationDashboard",
         "DeepHat_GUI",
         "FovCircleOverlay",
-        "DeepHat_ESP_Highlight"
+        "DeepHat_ESP_Highlight",
+        "DeepHat_ESP_Container"
     }
+
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("Highlight") and (obj.Name:find("DeepHat") or obj.Name:find("HL_")) then
+                obj:Destroy()
+            end
+        end
+    end)
 
     for _, container in ipairs(containers) do
         for _, name in ipairs(targetNames) do
@@ -61,7 +70,7 @@ do
         ["Normal"] = {
             SimulationActive = true,
             AimMode = "HoldRMB",
-            HoldToAim = false,
+            HoldToAim = true,
             FOV = 70.0,
             Smoothing = 0.15,
             AngularVelocity = 240.0,
@@ -88,7 +97,7 @@ do
         ["Leve"] = {
             SimulationActive = true,
             AimMode = "HoldRMB",
-            HoldToAim = false,
+            HoldToAim = true,
             FOV = 45.0,
             Smoothing = 0.28,
             AngularVelocity = 140.0,
@@ -115,7 +124,7 @@ do
         ["Medio"] = {
             SimulationActive = true,
             AimMode = "HoldRMB",
-            HoldToAim = false,
+            HoldToAim = true,
             FOV = 80.0,
             Smoothing = 0.09,
             AngularVelocity = 320.0,
@@ -142,7 +151,7 @@ do
         ["Agressivo"] = {
             SimulationActive = true,
             AimMode = "HoldRMB",
-            HoldToAim = false,
+            HoldToAim = true,
             FOV = 120.0,
             Smoothing = 0.02,
             AngularVelocity = 600.0,
@@ -169,7 +178,7 @@ do
         ["Custom"] = {
             SimulationActive = true,
             AimMode = "HoldRMB",
-            HoldToAim = false,
+            HoldToAim = true,
             FOV = 70.0,
             Smoothing = 0.15,
             AngularVelocity = 240.0,
@@ -199,7 +208,7 @@ do
     local CurrentState: ProfileData = {
         SimulationActive = true,
         AimMode = "HoldRMB",
-        HoldToAim = false,
+        HoldToAim = true,
         FOV = 70.0,
         Smoothing = 0.15,
         AngularVelocity = 240.0,
@@ -345,7 +354,7 @@ do
                 local inst = Instance.new("Highlight")
                 inst.Name = "HL_" .. character.Name
                 inst.Adornee = character
-                inst.FillTransparency = 0.40
+                inst.FillTransparency = 0.60
                 inst.OutlineTransparency = 0.05
                 inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                 inst.Enabled = true
@@ -1519,17 +1528,28 @@ local function GetAllTargetCharacters(): { Model }
         if not model or not model:IsA("Model") or model == myChar or seen[model] then return end
         if myChar and model:IsDescendantOf(myChar) then return end
 
-        -- Verificacao de Humanoid (Ignora quem ja morreu)
+        -- CRÍTICO: Um alvo VÁLIDO deve OBRIGATORIAMENTE possuir um Humanoid (Jogador, Dummy, NPC)!
+        -- Modelos sem Humanoid são o MAPA, PRÉDIOS, CHÃO ou CENÁRIO e NUNCA devem ser destacados!
         local hum = model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildWhichIsA("Humanoid", true)
-        if hum and hum.Health <= 0 then
+        if not hum then
             return
         end
 
-        -- Confirma se a instancia possui geometria fisica valida (Partes ou Pivot)
-        local hasPart = (model.PrimaryPart ~= nil) or (model:FindFirstChildWhichIsA("BasePart", true) ~= nil)
-        if not hasPart then
-            local ok, p = pcall(function() return model:GetPivot() end)
-            if not ok or not p then return end
+        -- Se a entidade estiver morta, ignora
+        if hum.Health <= 0 then
+            return
+        end
+
+        -- Deve ter ao menos uma parte de corpo identificável
+        local root = model:FindFirstChild("HumanoidRootPart", true)
+            or model:FindFirstChild("Head", true)
+            or model:FindFirstChild("Torso", true)
+            or model:FindFirstChild("UpperTorso", true)
+            or model.PrimaryPart
+            or model:FindFirstChildWhichIsA("BasePart", true)
+
+        if not root then
+            return
         end
 
         seen[model] = true
