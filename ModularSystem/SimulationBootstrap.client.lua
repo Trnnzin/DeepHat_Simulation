@@ -1,4 +1,3 @@
-local lastUiUpdate = 0
 ﻿--!strict
 -- SimulationBootstrap.client.lua
 -- Orquestrador Principal: Integra SimConfig, AdvancedKinematics e DashboardGUI
@@ -32,9 +31,9 @@ end)
 local isSimulationRunning = false
 local simulationConnection: RBXScriptConnection? = nil
 local lastSnapTime = 0
+local lastUiUpdate = 0
 
 -- Funcao utilitaria para obter uma posicao alvo de teste
--- (Se houver outro player no servidor ele foca nele; caso contrario gera um ponto de orbita virtual)
 local function GetTargetPosition(): Vector3
     for _, other in ipairs(Players:GetPlayers()) do
         if other ~= LocalPlayer and other.Character and other.Character:FindFirstChild("HumanoidRootPart") then
@@ -56,27 +55,33 @@ DashboardGUI.OnStartRequested = function()
     print("[Simulador] Teste INICIADO com perfil:", SimConfig.Get("ActiveProfile"))
 
     simulationConnection = RunService.RenderStepped:Connect(function(dt)
-        local targetPos = GetTargetPosition()
-        local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
-        local reactionTime = SimConfig.Get("ReactionTime") or 0.2
-        local now = os.clock()
+        local success, err = pcall(function()
+            local targetPos = GetTargetPosition()
+            local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
+            local reactionTime = SimConfig.Get("ReactionTime") or 0.2
+            local now = os.clock()
 
-        local telemetry
-        -- Decide estocasticamente se gera um Snap abrupto ou um Smooth Tracking organico
-        if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
-            lastSnapTime = now
-            telemetry = KinematicsController:StepSnap(targetPos, dt)
-        else
-            telemetry = KinematicsController:StepSmooth(targetPos, dt)
-        end
+            local telemetry
+            -- Decide estocasticamente se gera um Snap abrupto ou um Smooth Tracking organico
+            if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
+                lastSnapTime = now
+                telemetry = KinematicsController:StepSnap(targetPos, dt)
+            else
+                telemetry = KinematicsController:StepSmooth(targetPos, dt)
+            end
 
-        -- Aplica a orientacao calculada na camera virtual
-        Camera.CFrame = telemetry.cframe
+            -- Aplica a orientacao calculada na camera virtual
+            Camera.CFrame = telemetry.cframe
 
-        -- Otimizacao: Atualiza telemetria da UI a 10 Hz (evita queda de FPS)
-        if (now - lastUiUpdate) >= 0.1 then
-            lastUiUpdate = now
-            DashboardGUI:UpdateTelemetryDisplay(telemetry)
+            -- Otimizacao: Atualiza telemetria da UI a 10 Hz (evita queda de FPS)
+            if (now - lastUiUpdate) >= 0.1 then
+                lastUiUpdate = now
+                DashboardGUI:UpdateTelemetryDisplay(telemetry)
+            end
+        end)
+
+        if not success then
+            warn("[SimulationBootstrap] Erro na atualizacao de frame: " .. tostring(err))
         end
     end)
 end

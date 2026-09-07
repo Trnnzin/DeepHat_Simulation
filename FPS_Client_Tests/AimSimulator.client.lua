@@ -1,34 +1,55 @@
-﻿-- DeepHat FPS Aim Simulator (Para testes de detecção de mira / aceleração angular)
-local Player = game.Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+﻿--!strict
+-- DeepHat FPS Aim Simulator (Target Lock & Cinematic Camera Tracking)
+-- Otimizado para alta frequencia com RenderStepped, protecao contra divisao por zero e pcall.
+
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 local Settings = {
     Enabled = true,
-    TargetPos = Vector3.new(0, 10, 0), -- Defina a posição do alvo/dummy aqui
-    AimType = "SNAP",                  -- "SNAP" (Instantâneo) ou "SMOOTH" (Suave/Tracking)
-    Smoothness = 0.1,                  -- Fator de interpolação (0.01 a 1)
+    TargetPos = Vector3.new(0, 10, 0), -- Posicao do alvo padrao
+    AimType = "SMOOTH",                -- "SNAP" (Instantaneo) ou "SMOOTH" (Suave/Tracking)
+    Smoothness = 0.15,                 -- Fator de suavidade (0.01 a 1.0)
+    EpsilonDistance = 0.001,           -- Distancia minima para evitar divisao por zero (NaN)
 }
 
-local function SimulateAim()
-    if not Settings.Enabled then return end
+local function ProcessAimStep(dt: number)
+    if not Settings.Enabled or not Camera then
+        return
+    end
 
-    local targetCF = CFrame.new(Camera.CFrame.Position, Settings.TargetPos)
+    local cameraPos = Camera.CFrame.Position
+    local targetPos = Settings.TargetPos
+    local offset = targetPos - cameraPos
+
+    -- Protecao contra divisao por zero e NaN
+    if offset.Magnitude < Settings.EpsilonDistance then
+        return
+    end
+
+    local desiredCFrame = CFrame.lookAt(cameraPos, targetPos)
 
     if Settings.AimType == "SNAP" then
-        -- Simula o "Snap" (ajuste instantâneo em 1 frame)
-        Camera.CFrame = targetCF
+        Camera.CFrame = desiredCFrame
     elseif Settings.AimType == "SMOOTH" then
-        -- Simula o "Tracking" com interpolação contínua
-        Camera.CFrame = Camera.CFrame:Lerp(targetCF, Settings.Smoothness)
+        -- Interpolacao independente de taxa de quadros (frame-rate independent lerp)
+        local clampedWeight = math.clamp(Settings.Smoothness, 0.01, 1.0)
+        local alpha = 1 - math.exp(-clampedWeight * (dt * 60) * 10)
+        Camera.CFrame = Camera.CFrame:Lerp(desiredCFrame, alpha)
     end
 end
 
--- Loop de execução
-task.spawn(function()
-    while Settings.Enabled do
-        SimulateAim()
-        task.wait()
+-- Loop de renderizacao de alta frequencia seguro
+local connection
+connection = RunService.RenderStepped:Connect(function(dt: number)
+    local success, err = pcall(ProcessAimStep, dt)
+    if not success then
+        warn("[AimSimulator] Erro na atualizacao de orientacao: " .. tostring(err))
     end
 end)
 
-print("[System] Simulador de Mira Ativado. Alvo em: ", Settings.TargetPos)
+print("[System] Simulador de Mira Otimizado Ativado. Alvo em:", Settings.TargetPos)
