@@ -691,7 +691,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     end)
 
     -- Funcao publica para atualizar os dados de telemetria
-    function (DashboardGUI :: any):UpdateTelemetryDisplay(data: any)
+    function DashboardGUI:UpdateTelemetryDisplay(data: any)
         if not data then return end
         teleVel.Text = string.format("VELOCIDADE ANGULAR: %.1f °/s", data.angularVelocity or 0)
         teleObs.Text = string.format("LINHA DE VISÃO: %s", data.isObstructed and "OBSTRUÍDO (PAREDE)" or "LIVRE")
