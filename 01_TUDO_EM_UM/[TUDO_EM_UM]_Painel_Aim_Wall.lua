@@ -137,7 +137,7 @@ do
             hl.FillTransparency = 0.5
             hl.OutlineTransparency = 0.1
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Parent = CoreGuiService
+            hl.Parent = character
             activeHighlights[character] = hl
         end
         return hl
@@ -1084,28 +1084,39 @@ local function GetBonePart(char: Model, boneSetting: string): BasePart?
     return char:FindFirstChild("Head") :: BasePart? or char:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
 
--- Seleciona o melhor alvo e calcula sua velocidade vetorial
-local function GetTargetData(): (Vector3, Vector3, Model?, boolean)
+-- Seleciona o melhor alvo dentro do FOV e atualiza ESP
+local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
     local myPos = myRoot and myRoot.Position or Camera.CFrame.Position
     local boneSetting = SimConfig.Get("TargetBone") or "Head"
+    local fov = SimConfig.Get("FOV") or 45.0
+    local enableESP = SimConfig.Get("EnableESP")
 
-    local closestDist = math.huge
+    local bestAngle = fov
     local chosenPos: Vector3? = nil
     local chosenVel = Vector3.zero
     local chosenModel: Model? = nil
     local isObstructed = false
 
     local now = os.clock()
+    local camPos = Camera.CFrame.Position
+    local camLook = Camera.CFrame.LookVector
 
     for _, other in ipairs(Players:GetPlayers()) do
         if other ~= LocalPlayer and other.Character then
             local char = other.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+
+            -- Ignora jogadores mortos
+            if hum and hum.Health <= 0 then
+                ESPVisualizer.Clear(char)
+                continue
+            end
+
             local targetPart = GetBonePart(char, boneSetting)
 
             if targetPart then
                 local currentPos = targetPart.Position
-                local d = (currentPos - myPos).Magnitude
 
                 -- Calculo de velocidade vetorial V = deltaP / deltaT
                 local vel = Vector3.zero
@@ -1119,61 +1130,80 @@ local function GetTargetData(): (Vector3, Vector3, Model?, boolean)
                 targetLastPosCache[other] = { pos = currentPos, time = now }
 
                 -- Checagem de obstrucao de visao
-                local obstructed = Kinematics:CheckObstruction(Camera.CFrame.Position, currentPos)
+                local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
 
                 -- Atualiza ESP Chams para todos os jogadores no mapa
-                ESPVisualizer.UpdateTarget(char, obstructed, false)
+                if enableESP then
+                    ESPVisualizer.UpdateTarget(char, obstructed, false)
+                else
+                    ESPVisualizer.Clear(char)
+                end
 
-                if d < closestDist then
-                    closestDist = d
-                    chosenPos = currentPos
-                    chosenVel = vel
-                    chosenModel = char
-                    isObstructed = obstructed
+                -- Calcula o angulo em relacao a mira (FOV)
+                local toTarget = (currentPos - camPos)
+                if toTarget.Magnitude > 0.5 then
+                    local dir = toTarget.Unit
+                    local dot = math.clamp(camLook:Dot(dir), -1.0, 1.0)
+                    local angleDeg = math.deg(math.acos(dot))
+
+                    if angleDeg < bestAngle then
+                        bestAngle = angleDeg
+                        chosenPos = currentPos
+                        chosenVel = vel
+                        chosenModel = char
+                        isObstructed = obstructed
+                    end
                 end
             end
         end
     end
 
     -- Destaca o alvo focado com cor mais evidente no ESP
-    if chosenModel then
+    if chosenModel and enableESP then
         ESPVisualizer.UpdateTarget(chosenModel, isObstructed, true)
-        return chosenPos :: Vector3, chosenVel, chosenModel, isObstructed
     end
 
-    -- Alvo orbital procedural (se estiver sozinho no servidor)
-    local t = os.clock() * 0.9
-    local center = myPos + Vector3.new(0, 3, 0)
-    local orbPos = center + Vector3.new(math.sin(t) * 16, math.sin(t * 0.7) * 2, math.cos(t) * 16)
-    local orbVel = Vector3.new(math.cos(t) * 16 * 0.9, math.cos(t * 0.7) * 2 * 0.63, -math.sin(t) * 16 * 0.9)
-
-    return orbPos, orbVel, nil, false
+    return chosenPos, chosenVel, chosenModel, isObstructed
 end
 
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat v4.0] Simulador INICIADO com Previsao e Chams ESP!")
+    print("[DeepHat v4.0] Simulador e Funcoes ATIVADAS!")
 
     conn = RunService.RenderStepped:Connect(function(dt)
         local targetPos, targetVel, targetModel, obstructed = GetTargetData()
-        local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
-        local reactionTime = SimConfig.Get("ReactionTime") or 0.2
         local now = os.clock()
 
-        local telem
-        if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
-            lastSnapTime = now
-            telem = Kinematics:StepSnap(targetPos, targetVel, dt)
+        if targetPos and isRunning then
+            local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
+            local reactionTime = SimConfig.Get("ReactionTime") or 0.2
+
+            local telem
+            if math.random() < snapFreq and (now - lastSnapTime > reactionTime) then
+                lastSnapTime = now
+                telem = Kinematics:StepSnap(targetPos, targetVel, dt)
+            else
+                telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
+            end
+
+            Camera.CFrame = telem.cframe
+
+            if (now - lastUiUpdate) >= 0.1 then
+                lastUiUpdate = now
+                DashboardGUI:UpdateTelemetryDisplay(telem)
+            end
         else
-            telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
-        end
-
-        Camera.CFrame = telem.cframe
-
-        if (now - lastUiUpdate) >= 0.1 then
-            lastUiUpdate = now
-            DashboardGUI:UpdateTelemetryDisplay(telem)
+            -- Sem alvo no FOV: mantem camera livre e atualiza telemetria em repouso
+            if (now - lastUiUpdate) >= 0.1 then
+                lastUiUpdate = now
+                DashboardGUI:UpdateTelemetryDisplay({
+                    angularVelocity = 0,
+                    isObstructed = false,
+                    mode = "LIVRE",
+                    suspicionScore = 0
+                })
+            end
         end
     end)
 end
@@ -1207,14 +1237,25 @@ Players.PlayerRemoving:Connect(function(plr)
     targetLastPosCache[plr] = nil
 end)
 
-print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [HOME] para abrir/fechar.")
+-- Limpa ESP se o usuario desativar o toggle na interface
+SimConfig.Subscribe("EnableESP", function(enabled)
+    if not enabled then
+        ESPVisualizer.ClearAll()
+    end
+end)
 
+-- Inicia automaticamente todas as funcoes para funcionar direto ao injetar!
+task.defer(function()
+    DashboardGUI.OnStartRequested()
+end)
+
+print("[DeepHat v4.0] Suite com Previsao Balistica e Chams ESP carregada! [HOME] para abrir/fechar.")
 
 -- Notificacao no chat / console para confirmar carregamento
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "DeepHat v4.0 Ativado",
-        Text = "Pressione a tecla [HOME] para abrir/fechar o menu!",
+        Text = "Funções ativas! Pressione [HOME] para abrir o menu.",
         Duration = 5
     })
 end)
