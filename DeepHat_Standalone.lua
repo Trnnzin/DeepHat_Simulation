@@ -377,8 +377,7 @@ do
         local obsRatio = hist.totalSamples > 0 and (hist.obstructedCount / hist.totalSamples * 100) or 0
         local snapRatio = hist.totalSamples > 0 and (hist.snapCount / hist.totalSamples * 100) or 0
 
-        print("
-=======================================================")
+        print("=======================================================")
         print("          RELATORIO DE TELEMETRIA DE AGENTE 3D         ")
         print("=======================================================")
         print(string.format("  Total de Quadros Amostrados: %d", hist.totalSamples))
@@ -388,8 +387,7 @@ do
         print(string.format("  Rastreamento Ocluido/Parede: %.1f%%", obsRatio))
         print(string.format("  Previsao Balistica Ativa:    %s", tostring(SimConfig.Get("EnableLead"))))
         print(string.format("  Osso Alvo Selecionado:       %s", tostring(SimConfig.Get("TargetBone"))))
-        print("=======================================================
-")
+        print("=======================================================")
     end
 end
 
