@@ -58,15 +58,155 @@ local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Ca
 local SimConfig = {}
 do
     local PROFILES: { [string]: ProfileData } = {
-    ["Normal"] = {
-        SimulationActive = false,
-        FOV = 60.0,
+        ["Normal"] = {
+            SimulationActive = true,
+            AimMode = "HoldRMB",
+            HoldToAim = false,
+            FOV = 70.0,
+            Smoothing = 0.15,
+            AngularVelocity = 240.0,
+            ResponseTime = 16,
+            TrajectoryPrecision = 98.5,
+            UpdateFrequency = 60,
+            VectorRadius = 300.0,
+            ActiveProfile = "Normal",
+            EventFrequency = 20,
+            Intensity = 75,
+            MoveSpeed = 16.0,
+            AccelerationCurve = 1.25,
+            CycleDuration = 30,
+            SimulatedAgents = 4,
+            TargetRegion = "Head",
+            TargetBone = "Head",
+            EnableESP = true,
+            ShowFovCircle = true,
+            EnableLead = true,
+            ProjectileSpeed = 900.0,
+            VisibleOnly = false,
+            TeamCheck = false
+        },
+        ["Leve"] = {
+            SimulationActive = true,
+            AimMode = "HoldRMB",
+            HoldToAim = false,
+            FOV = 45.0,
+            Smoothing = 0.28,
+            AngularVelocity = 140.0,
+            ResponseTime = 30,
+            TrajectoryPrecision = 95.0,
+            UpdateFrequency = 30,
+            VectorRadius = 150.0,
+            ActiveProfile = "Leve",
+            EventFrequency = 10,
+            Intensity = 40,
+            MoveSpeed = 12.0,
+            AccelerationCurve = 1.0,
+            CycleDuration = 20,
+            SimulatedAgents = 2,
+            TargetRegion = "Torso",
+            TargetBone = "Torso",
+            EnableESP = true,
+            ShowFovCircle = true,
+            EnableLead = false,
+            ProjectileSpeed = 800.0,
+            VisibleOnly = false,
+            TeamCheck = false
+        },
+        ["Medio"] = {
+            SimulationActive = true,
+            AimMode = "HoldRMB",
+            HoldToAim = false,
+            FOV = 80.0,
+            Smoothing = 0.09,
+            AngularVelocity = 320.0,
+            ResponseTime = 10,
+            TrajectoryPrecision = 90.0,
+            UpdateFrequency = 60,
+            VectorRadius = 350.0,
+            ActiveProfile = "Medio",
+            EventFrequency = 30,
+            Intensity = 85,
+            MoveSpeed = 22.0,
+            AccelerationCurve = 1.6,
+            CycleDuration = 45,
+            SimulatedAgents = 6,
+            TargetRegion = "Head",
+            TargetBone = "Head",
+            EnableESP = true,
+            ShowFovCircle = true,
+            EnableLead = true,
+            ProjectileSpeed = 1000.0,
+            VisibleOnly = false,
+            TeamCheck = false
+        },
+        ["Agressivo"] = {
+            SimulationActive = true,
+            AimMode = "HoldRMB",
+            HoldToAim = false,
+            FOV = 120.0,
+            Smoothing = 0.02,
+            AngularVelocity = 600.0,
+            ResponseTime = 2,
+            TrajectoryPrecision = 80.0,
+            UpdateFrequency = 120,
+            VectorRadius = 500.0,
+            ActiveProfile = "Agressivo",
+            EventFrequency = 50,
+            Intensity = 100,
+            MoveSpeed = 32.0,
+            AccelerationCurve = 2.4,
+            CycleDuration = 60,
+            SimulatedAgents = 10,
+            TargetRegion = "Head",
+            TargetBone = "Head",
+            EnableESP = true,
+            ShowFovCircle = true,
+            EnableLead = true,
+            ProjectileSpeed = 1200.0,
+            VisibleOnly = false,
+            TeamCheck = false
+        },
+        ["Custom"] = {
+            SimulationActive = true,
+            AimMode = "HoldRMB",
+            HoldToAim = false,
+            FOV = 70.0,
+            Smoothing = 0.15,
+            AngularVelocity = 240.0,
+            ResponseTime = 16,
+            TrajectoryPrecision = 98.5,
+            UpdateFrequency = 60,
+            VectorRadius = 300.0,
+            ActiveProfile = "Custom",
+            EventFrequency = 20,
+            Intensity = 75,
+            MoveSpeed = 16.0,
+            AccelerationCurve = 1.25,
+            CycleDuration = 30,
+            SimulatedAgents = 4,
+            TargetRegion = "Head",
+            TargetBone = "Head",
+            EnableESP = true,
+            ShowFovCircle = true,
+            EnableLead = true,
+            ProjectileSpeed = 900.0,
+            VisibleOnly = false,
+            TeamCheck = false
+        }
+    }
+
+    -- Estado inicial ativo
+    local CurrentState: ProfileData = {
+        SimulationActive = true,
+        AimMode = "HoldRMB",
+        HoldToAim = false,
+        FOV = 70.0,
         Smoothing = 0.15,
-        AngularVelocity = 180.0,
+        AngularVelocity = 240.0,
         ResponseTime = 16,
         TrajectoryPrecision = 98.5,
         UpdateFrequency = 60,
-        VectorRadius = 150.0,
+        VectorRadius = 300.0,
         ActiveProfile = "Normal",
         EventFrequency = 20,
         Intensity = 75,
@@ -74,188 +214,99 @@ do
         AccelerationCurve = 1.25,
         CycleDuration = 30,
         SimulatedAgents = 4,
-        TargetRegion = "Head"
-    },
-    ["Leve"] = {
-        SimulationActive = false,
-        FOV = 40.0,
-        Smoothing = 0.28,
-        AngularVelocity = 120.0,
-        ResponseTime = 30,
-        TrajectoryPrecision = 95.0,
-        UpdateFrequency = 30,
-        VectorRadius = 100.0,
-        ActiveProfile = "Leve",
-        EventFrequency = 10,
-        Intensity = 40,
-        MoveSpeed = 12.0,
-        AccelerationCurve = 1.0,
-        CycleDuration = 20,
-        SimulatedAgents = 2,
-        TargetRegion = "Torso"
-    },
-    ["Medio"] = {
-        SimulationActive = false,
-        FOV = 75.0,
-        Smoothing = 0.09,
-        AngularVelocity = 280.0,
-        ResponseTime = 10,
-        TrajectoryPrecision = 90.0,
-        UpdateFrequency = 60,
-        VectorRadius = 200.0,
-        ActiveProfile = "Medio",
-        EventFrequency = 30,
-        Intensity = 85,
-        MoveSpeed = 22.0,
-        AccelerationCurve = 1.6,
-        CycleDuration = 45,
-        SimulatedAgents = 6,
-        TargetRegion = "Head"
-    },
-    ["Agressivo"] = {
-        SimulationActive = false,
-        FOV = 120.0,
-        Smoothing = 0.02,
-        AngularVelocity = 540.0,
-        ResponseTime = 2,
-        TrajectoryPrecision = 80.0,
-        UpdateFrequency = 120,
-        VectorRadius = 350.0,
-        ActiveProfile = "Agressivo",
-        EventFrequency = 50,
-        Intensity = 100,
-        MoveSpeed = 32.0,
-        AccelerationCurve = 2.4,
-        CycleDuration = 60,
-        SimulatedAgents = 10,
-        TargetRegion = "Head"
-    },
-    ["Custom"] = {
-        SimulationActive = false,
-        FOV = 60.0,
-        Smoothing = 0.15,
-        AngularVelocity = 180.0,
-        ResponseTime = 16,
-        TrajectoryPrecision = 98.5,
-        UpdateFrequency = 60,
-        VectorRadius = 150.0,
-        ActiveProfile = "Custom",
-        EventFrequency = 20,
-        Intensity = 75,
-        MoveSpeed = 16.0,
-        AccelerationCurve = 1.25,
-        CycleDuration = 30,
-        SimulatedAgents = 4,
-        TargetRegion = "Head"
+        TargetRegion = "Head",
+        TargetBone = "Head",
+        EnableESP = true,
+        ShowFovCircle = true,
+        EnableLead = true,
+        ProjectileSpeed = 900.0,
+        VisibleOnly = false,
+        TeamCheck = false
     }
-}
 
--- Estado inicial ativo
-local CurrentState: ProfileData = {
-    SimulationActive = false,
-    FOV = 60.0,
-    Smoothing = 0.15,
-    AngularVelocity = 180.0,
-    ResponseTime = 16,
-    TrajectoryPrecision = 98.5,
-    UpdateFrequency = 60,
-    VectorRadius = 150.0,
-    ActiveProfile = "Normal",
-    EventFrequency = 20,
-    Intensity = 75,
-    MoveSpeed = 16.0,
-    AccelerationCurve = 1.25,
-    CycleDuration = 30,
-    SimulatedAgents = 4,
-    TargetRegion = "Head"
-}
+    local KeyListeners: { [string]: { (any) -> () } } = {}
+    local GlobalListeners: { (string, any) -> () } = {}
 
--- Observadores (Observer Pattern)
-local KeyListeners: { [string]: { (any) -> () } } = {}
-local GlobalListeners: { (string, any) -> () } = {}
-
-function SimConfig.Get(key: string): any
-    return (CurrentState :: any)[key]
-end
-
-function SimConfig.GetAll(): ProfileData
-    local clone: any = {}
-    for k, v in pairs(CurrentState) do
-        clone[k] = v
-    end
-    return clone
-end
-
-function SimConfig.Set(key: string, value: any, silent: boolean?)
-    if (CurrentState :: any)[key] == value then
-        return
+    function SimConfig.Get(key: string): any
+        return (CurrentState :: any)[key]
     end
 
-    (CurrentState :: any)[key] = value
-
-    -- Se o usuario alterar um parametro individualmente sem selecionar perfil, muda para Custom
-    if key ~= "ActiveProfile" and key ~= "SimulationActive" and CurrentState.ActiveProfile ~= "Custom" then
-        CurrentState.ActiveProfile = "Custom"
-        SimConfig.Notify("ActiveProfile", "Custom")
+    function SimConfig.GetAll(): ProfileData
+        local clone: any = {}
+        for k, v in pairs(CurrentState) do
+            clone[k] = v
+        end
+        return clone
     end
 
-    if not silent then
-        SimConfig.Notify(key, value)
-    end
-end
+    function SimConfig.Set(key: string, value: any, silent: boolean?)
+        if (CurrentState :: any)[key] == value then
+            return
+        end
 
-function SimConfig.Notify(key: string, value: any)
-    if KeyListeners[key] then
-        for _, callback in ipairs(KeyListeners[key]) do
-            task.spawn(callback, value)
+        (CurrentState :: any)[key] = value
+
+        if key ~= "ActiveProfile" and key ~= "SimulationActive" and CurrentState.ActiveProfile ~= "Custom" then
+            CurrentState.ActiveProfile = "Custom"
+            SimConfig.Notify("ActiveProfile", "Custom")
+        end
+
+        if not silent then
+            SimConfig.Notify(key, value)
         end
     end
 
-    for _, callback in ipairs(GlobalListeners) do
-        task.spawn(callback, key, value)
-    end
-end
+    function SimConfig.Notify(key: string, value: any)
+        if KeyListeners[key] then
+            for _, callback in ipairs(KeyListeners[key]) do
+                task.spawn(callback, value)
+            end
+        end
 
-function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
-    if not KeyListeners[key] then
-        KeyListeners[key] = {}
-    end
-    table.insert(KeyListeners[key], callback)
-
-    return function()
-        local list = KeyListeners[key]
-        if not list then return end
-        local idx = table.find(list, callback)
-        if idx then
-            table.remove(list, idx)
+        for _, callback in ipairs(GlobalListeners) do
+            task.spawn(callback, key, value)
         end
     end
-end
 
-function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
-    table.insert(GlobalListeners, callback)
-    return function()
-        local idx = table.find(GlobalListeners, callback)
-        if idx then
-            table.remove(GlobalListeners, idx)
+    function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
+        if not KeyListeners[key] then
+            KeyListeners[key] = {}
+        end
+        table.insert(KeyListeners[key], callback)
+
+        return function()
+            local list = KeyListeners[key]
+            if not list then return end
+            local idx = table.find(list, callback)
+            if idx then
+                table.remove(list, idx)
+            end
         end
     end
-end
 
-function SimConfig.LoadProfile(profileName: string)
-    local profile = PROFILES[profileName]
-    if not profile then
-        warn(string.format("[SimConfig] Perfil desconhecido: %s", tostring(profileName)))
-        return
-    end
-
-    for k, v in pairs(profile) do
-        if k ~= "SimulationActive" then -- Preserva o estado de ativacao
-            (CurrentState :: any)[k] = v
-            SimConfig.Notify(k, v)
+    function SimConfig.SubscribeAll(callback: (string, any) -> ()): () -> ()
+        table.insert(GlobalListeners, callback)
+        return function()
+            local idx = table.find(GlobalListeners, callback)
+            if idx then
+                table.remove(GlobalListeners, idx)
+            end
         end
     end
-end
+
+    function SimConfig.LoadProfile(profileName: string)
+        local profile = PROFILES[profileName]
+        if not profile then
+            warn(string.format("[SimConfig] Perfil desconhecido: %s", tostring(profileName)))
+            return
+        end
+
+        for k, v in pairs(profile) do
+            SimConfig.Set(k, v, true)
+        end
+
+        SimConfig.Notify("ActiveProfile", profileName)
+    end
 end
 
 -- =========================================================================
@@ -271,10 +322,10 @@ do
             hl = Instance.new("Highlight")
             hl.Name = "DeepHat_ESP_Highlight"
             hl.Adornee = character
-            hl.FillTransparency = 0.5
+            hl.FillTransparency = 0.45
             hl.OutlineTransparency = 0.1
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            hl.Parent = character
+            pcall(function() hl.Parent = character end)
             activeHighlights[character] = hl
         end
         return hl
@@ -288,34 +339,36 @@ do
 
         local hl = GetOrCreateHighlight(character)
         if isMainTarget then
-            -- Alvo principal focado pela mira
+            -- Alvo focado na mira: Verde Brilhante (Visivel) ou Vermelho Vivo (Parede)
             if isObstructed then
-                -- Ocluido / Parede: Vermelho
-                hl.FillColor = Color3.fromRGB(255, 50, 50)
+                hl.FillColor = Color3.fromRGB(255, 45, 45)
                 hl.OutlineColor = Color3.fromRGB(255, 180, 180)
             else
-                -- Visivel: Verde Brilhante
-                hl.FillColor = Color3.fromRGB(50, 255, 100)
+                hl.FillColor = Color3.fromRGB(46, 230, 110)
                 hl.OutlineColor = Color3.fromRGB(200, 255, 200)
             end
+            hl.FillTransparency = 0.35
+            hl.OutlineTransparency = 0.05
         else
-            -- Outros alvos no mapa: Amarelo sutil
-            hl.FillColor = isObstructed and Color3.fromRGB(180, 80, 80) or Color3.fromRGB(80, 160, 220)
-            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            -- Outros alvos: Azul/Ciano (Visivel) ou Laranja/Vermelho escuro (Parede)
+            hl.FillColor = isObstructed and Color3.fromRGB(180, 70, 70) or Color3.fromRGB(50, 140, 230)
+            hl.OutlineColor = Color3.fromRGB(240, 240, 240)
+            hl.FillTransparency = 0.65
+            hl.OutlineTransparency = 0.25
         end
     end
 
     function ESPVisualizer.Clear(character: Model)
         local hl = activeHighlights[character]
         if hl then
-            hl:Destroy()
+            pcall(function() hl:Destroy() end)
             activeHighlights[character] = nil
         end
     end
 
     function ESPVisualizer.ClearAll()
         for char, hl in pairs(activeHighlights) do
-            if hl then hl:Destroy() end
+            if hl then pcall(function() hl:Destroy() end) end
         end
         table.clear(activeHighlights)
     end
@@ -547,44 +600,31 @@ end
 
 -- =========================================================================
 -- [4/5] MODULO: DashboardGUI
+
 -- =========================================================================
---[[
-    ============================================================================
-    MODULO: DashboardGUI
-    DESIGN: UI/UX Dark Theme Minimalista com Red Accents (Alta Densidade)
-    ARQUITETURA: 3 Colunas + Observer Pattern integrado com SimConfig
-    ============================================================================
---]]
-
-
-local UserInputService = game:GetService("UserInputService")
-local CoreGui = game:GetService("CoreGui")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-
+-- [4/5] MODULO: DashboardGUI (Interface Profissional Dark Theme 3-Colunas)
+-- =========================================================================
 local DashboardGUI = {}
 DashboardGUI.__index = DashboardGUI
 
 -- [PALETA DE DESIGN TOKENS]
 local THEME = {
-    BG_MAIN = Color3.fromRGB(13, 14, 17),
-    BG_PANEL = Color3.fromRGB(20, 22, 27),
-    BG_INPUT = Color3.fromRGB(26, 29, 36),
-    BORDER = Color3.fromRGB(38, 42, 53),
-    TEXT_MAIN = Color3.fromRGB(237, 237, 237),
-    TEXT_MUTED = Color3.fromRGB(125, 132, 148),
+    BG_MAIN = Color3.fromRGB(13, 14, 18),
+    BG_PANEL = Color3.fromRGB(19, 21, 26),
+    BG_INPUT = Color3.fromRGB(25, 28, 35),
+    BORDER = Color3.fromRGB(36, 40, 50),
+    TEXT_MAIN = Color3.fromRGB(240, 240, 240),
+    TEXT_MUTED = Color3.fromRGB(120, 128, 142),
     ACCENT_RED = Color3.fromRGB(224, 43, 54),
-    ACCENT_HOVER = Color3.fromRGB(255, 77, 88),
+    ACCENT_HOVER = Color3.fromRGB(255, 65, 75),
     SUCCESS = Color3.fromRGB(46, 204, 113),
 }
 
--- Callbacks publicos para o orquestrador (Bootstrap)
 DashboardGUI.OnStartRequested = nil :: (() -> ())?
 DashboardGUI.OnStopRequested = nil :: (() -> ())?
 DashboardGUI.OnResetRequested = nil :: (() -> ())?
 DashboardGUI.OnSaveRequested = nil :: (() -> ())?
 
--- Utilitarios de construcao
 local function AddCorner(parent: Instance, radius: number): UICorner
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, radius)
@@ -602,7 +642,7 @@ local function AddStroke(parent: Instance, color: Color3, thickness: number?): U
 end
 
 function DashboardGUI.Create(parentGui: Instance?): ScreenGui
-        local function GetSafeGuiParent(): Instance
+    local function GetSafeGuiParent(): Instance
         local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
         if ok and coreGui then
             local testOk = pcall(function()
@@ -628,10 +668,31 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = hostParent
 
+    -- Circulo Dinamico de FOV na Tela
+    local fovCircle = Instance.new("Frame")
+    fovCircle.Name = "FovCircleOverlay"
+    fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+    fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fovCircle.BackgroundTransparency = 1
+    fovCircle.Visible = SimConfig.Get("ShowFovCircle") == true
+    fovCircle.Parent = screenGui
+    AddCorner(fovCircle, 9999)
+    local fovStroke = AddStroke(fovCircle, THEME.ACCENT_RED, 1.5)
+    fovStroke.Transparency = 0.35
+
+    local fovCenterDot = Instance.new("Frame")
+    fovCenterDot.Size = UDim2.new(0, 4, 0, 4)
+    fovCenterDot.AnchorPoint = Vector2.new(0.5, 0.5)
+    fovCenterDot.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fovCenterDot.BackgroundColor3 = THEME.ACCENT_RED
+    fovCenterDot.BackgroundTransparency = 0.2
+    fovCenterDot.Parent = fovCircle
+    AddCorner(fovCenterDot, 2)
+
     -- Janela Principal (Compacta, 3 Colunas, Draggable)
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 860, 0, 530)
+    mainFrame.Size = UDim2.new(0, 880, 0, 520)
     mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
     mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     mainFrame.BackgroundColor3 = THEME.BG_MAIN
@@ -682,7 +743,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Titulo e Botoes de Janela
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(0.7, 0, 1, 0)
+    title.Size = UDim2.new(0.65, 0, 1, 0)
     title.Position = UDim2.new(0, 14, 0, 0)
     title.BackgroundTransparency = 1
     title.Font = Enum.Font.GothamBold
@@ -693,8 +754,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     title.Parent = header
 
     local hotkeyNotice = Instance.new("TextLabel")
-    hotkeyNotice.Size = UDim2.new(0, 140, 1, 0)
-    hotkeyNotice.Position = UDim2.new(1, -190, 0, 0)
+    hotkeyNotice.Size = UDim2.new(0, 150, 1, 0)
+    hotkeyNotice.Position = UDim2.new(1, -195, 0, 0)
     hotkeyNotice.BackgroundTransparency = 1
     hotkeyNotice.Font = Enum.Font.GothamMedium
     hotkeyNotice.TextSize = 10
@@ -743,9 +804,9 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local syncInputs: { [string]: { Input: TextBox, UpdateRatio: (number) -> () } } = {}
 
     --[[
-        Componente de Slider com Input Numerico Sincronizado
+        Componente de Slider com Input Numerico Sincronizado (Sem sobreposicao)
     --]]
-    local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number): Frame
+    local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number, layoutOrder: number?): Frame
         minVal = tonumber(minVal) or 0
         maxVal = tonumber(maxVal) or 100
         step = tonumber(step) or 1
@@ -754,27 +815,34 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         local span = math.max(maxVal - minVal, 0.0001)
 
         local container = Instance.new("Frame")
-        container.Size = UDim2.new(1, 0, 0, 44)
+        container.Name = "Slider_" .. configKey
+        container.Size = UDim2.new(1, 0, 0, 42)
         container.BackgroundTransparency = 1
+        container.LayoutOrder = layoutOrder or 10
         container.Parent = parent
 
         local headerRow = Instance.new("Frame")
-        headerRow.Size = UDim2.new(1, 0, 0, 20)
+        headerRow.Size = UDim2.new(1, 0, 0, 18)
         headerRow.BackgroundTransparency = 1
         headerRow.Parent = container
 
+        -- Titulo à esquerda (nunca se sobrepoe)
         local titleLabel = Instance.new("TextLabel")
-        titleLabel.Size = UDim2.new(0.65, 0, 1, 0)
+        titleLabel.Size = UDim2.new(1, -55, 1, 0)
+        titleLabel.Position = UDim2.new(0, 0, 0, 0)
         titleLabel.BackgroundTransparency = 1
         titleLabel.Font = Enum.Font.GothamMedium
         titleLabel.TextSize = 11
         titleLabel.TextColor3 = THEME.TEXT_MAIN
         titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
         titleLabel.Text = labelText
         titleLabel.Parent = headerRow
 
+        -- Input numerico à direita (badge compacto de alta precisao)
         local inputBox = Instance.new("TextBox")
-        inputBox.Size = UDim2.new(0.35, 0, 1, 0)
+        inputBox.Size = UDim2.new(0, 50, 1, 0)
+        inputBox.Position = UDim2.new(1, -50, 0, 0)
         inputBox.BackgroundColor3 = THEME.BG_INPUT
         inputBox.TextColor3 = THEME.ACCENT_RED
         inputBox.Font = Enum.Font.GothamBold
@@ -785,9 +853,10 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         AddCorner(inputBox, 4)
         AddStroke(inputBox, THEME.BORDER, 1)
 
+        -- Barra do Slider (Trilho)
         local track = Instance.new("Frame")
         track.Size = UDim2.new(1, 0, 0, 6)
-        track.Position = UDim2.new(0, 0, 0, 28)
+        track.Position = UDim2.new(0, 0, 0, 24)
         track.BackgroundColor3 = THEME.BG_INPUT
         track.Parent = container
         AddCorner(track, 3)
@@ -835,7 +904,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         track.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then
                 isSliderDragging = true
-                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+                local trackWidth = math.max(track.AbsoluteSize.X, 1)
+                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / trackWidth, 0, 1)
                 applyVal(minVal + relX * (maxVal - minVal))
             end
         end)
@@ -848,7 +918,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
         UserInputService.InputChanged:Connect(function(input)
             if isSliderDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+                local trackWidth = math.max(track.AbsoluteSize.X, 1)
+                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / trackWidth, 0, 1)
                 applyVal(minVal + relX * (maxVal - minVal))
             end
         end)
@@ -867,23 +938,29 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- COLUNA 1: Configuracoes de Vetores e Direcao
     -- =========================================================================
     local col1 = Instance.new("ScrollingFrame")
+    col1.Name = "Col1_Vectors"
     col1.BackgroundColor3 = THEME.BG_PANEL
     col1.ScrollBarThickness = 3
     col1.ScrollBarImageColor3 = THEME.BORDER
-    col1.CanvasSize = UDim2.new(0, 0, 0, 390)
+    col1.CanvasSize = UDim2.new(0, 0, 0, 0)
+    col1.AutomaticCanvasSize = Enum.AutomaticSize.Y
     col1.Parent = contentArea
     AddCorner(col1, 6)
     AddStroke(col1, THEME.BORDER, 1)
 
     local list1 = Instance.new("UIListLayout")
-    list1.Padding = UDim.new(0, 6)
+    list1.Padding = UDim.new(0, 8)
+    list1.SortOrder = Enum.SortOrder.LayoutOrder
     list1.Parent = col1
 
     local pad1 = Instance.new("UIPadding")
-    pad1.PaddingTop = UDim.new(0, 10); pad1.PaddingLeft = UDim.new(0, 10); pad1.PaddingRight = UDim.new(0, 10)
+    pad1.PaddingTop = UDim.new(0, 10); pad1.PaddingBottom = UDim.new(0, 10)
+    pad1.PaddingLeft = UDim.new(0, 10); pad1.PaddingRight = UDim.new(0, 10)
     pad1.Parent = col1
 
     local col1Title = Instance.new("TextLabel")
+    col1Title.Name = "00_Title"
+    col1Title.LayoutOrder = 1
     col1Title.Size = UDim2.new(1, 0, 0, 18)
     col1Title.BackgroundTransparency = 1
     col1Title.Font = Enum.Font.GothamBold
@@ -895,6 +972,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Toggle de Ativacao
     local toggleRow = Instance.new("Frame")
+    toggleRow.Name = "01_ToggleRow"
+    toggleRow.LayoutOrder = 2
     toggleRow.Size = UDim2.new(1, 0, 0, 28)
     toggleRow.BackgroundTransparency = 1
     toggleRow.Parent = col1
@@ -931,37 +1010,48 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         SimConfig.Set("SimulationActive", newState)
         toggleBtn.BackgroundColor3 = newState and THEME.ACCENT_RED or THEME.BG_INPUT
         toggleDot.Position = newState and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+        if newState then
+            if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
+        else
+            if DashboardGUI.OnStopRequested then DashboardGUI.OnStopRequested() end
+        end
     end)
 
-    CreateSliderField(col1, "Ângulo de Campo (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
-    CreateSliderField(col1, "Coeficiente de Suavização", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
-    CreateSliderField(col1, "Velocidade Rotação (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5)
-    CreateSliderField(col1, "Tempo de Resposta (ms)", "ResponseTime", 0, 250, SimConfig.Get("ResponseTime"), 1)
-    CreateSliderField(col1, "Precisão de Trajetória (%)", "TrajectoryPrecision", 50, 100, SimConfig.Get("TrajectoryPrecision"), 0.5)
-    CreateSliderField(col1, "Frequência Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5)
-    CreateSliderField(col1, "Raio de Atuação (m)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
+    CreateSliderField(col1, "Ângulo de Campo (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1, 3)
+    CreateSliderField(col1, "Coeficiente de Suavização", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01, 4)
+    CreateSliderField(col1, "Velocidade Rotação (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5, 5)
+    CreateSliderField(col1, "Tempo de Resposta (ms)", "ResponseTime", 0, 250, SimConfig.Get("ResponseTime"), 1, 6)
+    CreateSliderField(col1, "Precisão de Trajetória (%)", "TrajectoryPrecision", 50, 100, SimConfig.Get("TrajectoryPrecision"), 0.5, 7)
+    CreateSliderField(col1, "Frequência Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5, 8)
+    CreateSliderField(col1, "Raio de Atuação (m)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5, 9)
 
     -- =========================================================================
     -- COLUNA 2: Parametros de Comportamento do Sistema
     -- =========================================================================
     local col2 = Instance.new("ScrollingFrame")
+    col2.Name = "Col2_Behavior"
     col2.BackgroundColor3 = THEME.BG_PANEL
     col2.ScrollBarThickness = 3
     col2.ScrollBarImageColor3 = THEME.BORDER
-    col2.CanvasSize = UDim2.new(0, 0, 0, 390)
+    col2.CanvasSize = UDim2.new(0, 0, 0, 0)
+    col2.AutomaticCanvasSize = Enum.AutomaticSize.Y
     col2.Parent = contentArea
     AddCorner(col2, 6)
     AddStroke(col2, THEME.BORDER, 1)
 
     local list2 = Instance.new("UIListLayout")
-    list2.Padding = UDim.new(0, 6)
+    list2.Padding = UDim.new(0, 8)
+    list2.SortOrder = Enum.SortOrder.LayoutOrder
     list2.Parent = col2
 
     local pad2 = Instance.new("UIPadding")
-    pad2.PaddingTop = UDim.new(0, 10); pad2.PaddingLeft = UDim.new(0, 10); pad2.PaddingRight = UDim.new(0, 10)
+    pad2.PaddingTop = UDim.new(0, 10); pad2.PaddingBottom = UDim.new(0, 10)
+    pad2.PaddingLeft = UDim.new(0, 10); pad2.PaddingRight = UDim.new(0, 10)
     pad2.Parent = col2
 
     local col2Title = Instance.new("TextLabel")
+    col2Title.Name = "00_Title"
+    col2Title.LayoutOrder = 1
     col2Title.Size = UDim2.new(1, 0, 0, 18)
     col2Title.BackgroundTransparency = 1
     col2Title.Font = Enum.Font.GothamBold
@@ -973,6 +1063,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Abas de Selecao de Perfil
     local profileBar = Instance.new("Frame")
+    profileBar.Name = "01_ProfileBar"
+    profileBar.LayoutOrder = 2
     profileBar.Size = UDim2.new(1, 0, 0, 26)
     profileBar.BackgroundColor3 = THEME.BG_INPUT
     profileBar.Parent = col2
@@ -1010,17 +1102,18 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end)
     end
 
-    CreateSliderField(col2, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1)
-    CreateSliderField(col2, "Intensidade de Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1)
-    CreateSliderField(col2, "Velocidade Deslocamento", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1)
-    CreateSliderField(col2, "Gradiente de Aceleração", "AccelerationCurve", 0.2, 3.0, SimConfig.Get("AccelerationCurve"), 0.05)
-    CreateSliderField(col2, "Duração do Ciclo (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5)
-    CreateSliderField(col2, "Agentes Simultâneos", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1)
+    CreateSliderField(col2, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1, 3)
+    CreateSliderField(col2, "Intensidade de Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1, 4)
+    CreateSliderField(col2, "Velocidade Deslocamento", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1, 5)
+    CreateSliderField(col2, "Gradiente de Aceleração", "AccelerationCurve", 0.2, 3.0, SimConfig.Get("AccelerationCurve"), 0.05, 6)
+    CreateSliderField(col2, "Duração do Ciclo (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5, 7)
+    CreateSliderField(col2, "Agentes Simultâneos", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1, 8)
 
     -- =========================================================================
     -- COLUNA 3: Mapeamento de Regioes (HitBox Coords) & Telemetria
     -- =========================================================================
     local col3 = Instance.new("Frame")
+    col3.Name = "Col3_Coords"
     col3.BackgroundColor3 = THEME.BG_PANEL
     col3.Parent = contentArea
     AddCorner(col3, 6)
@@ -1039,7 +1132,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Canvas do Manequim / Dummy
     local dummyCanvas = Instance.new("Frame")
-    dummyCanvas.Size = UDim2.new(1, -20, 0.55, 0)
+    dummyCanvas.Size = UDim2.new(1, -20, 0.52, 0)
     dummyCanvas.Position = UDim2.new(0, 10, 0, 32)
     dummyCanvas.BackgroundColor3 = THEME.BG_INPUT
     dummyCanvas.Parent = col3
@@ -1076,8 +1169,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     legLineR.Parent = dummyCanvas
 
     local activeRegionBadge = Instance.new("TextLabel")
-    activeRegionBadge.Size = UDim2.new(1, -20, 0, 22)
-    activeRegionBadge.Position = UDim2.new(0, 10, 0.55, 38)
+    activeRegionBadge.Size = UDim2.new(1, -20, 0, 24)
+    activeRegionBadge.Position = UDim2.new(0, 10, 0.52, 38)
     activeRegionBadge.BackgroundColor3 = THEME.BG_INPUT
     activeRegionBadge.Font = Enum.Font.GothamBold
     activeRegionBadge.TextSize = 10
@@ -1118,6 +1211,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
         node.MouseButton1Click:Connect(function()
             SimConfig.Set("TargetRegion", n.Name)
+            SimConfig.Set("TargetBone", n.Name)
             UpdateRegionHighlights(n.Name)
         end)
     end
@@ -1188,7 +1282,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         return btn
     end
 
-    CreateActionButton("↺ RESETAR", false, function()
+    local btnReset = CreateActionButton("↺ RESETAR", false, function()
         SimConfig.LoadProfile("Normal")
         UpdateProfileHighlights("Normal")
         if DashboardGUI.OnResetRequested then
@@ -1196,13 +1290,20 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end
     end)
 
-    CreateActionButton("💾 SALVAR CONFIG", false, function()
+    local btnSave = CreateActionButton("💾 SALVAR CONFIG", false, function()
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "DeepHat Suite",
+                Text = "Configurações salvas com sucesso!",
+                Duration = 3
+            })
+        end)
         if DashboardGUI.OnSaveRequested then
             DashboardGUI.OnSaveRequested()
         end
     end)
 
-    CreateActionButton("⏹ PARAR", false, function()
+    local btnStop = CreateActionButton("⏹ PARAR", false, function()
         SimConfig.Set("SimulationActive", false)
         toggleBtn.BackgroundColor3 = THEME.BG_INPUT
         toggleDot.Position = UDim2.new(0, 3, 0.5, -7)
@@ -1211,7 +1312,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end
     end)
 
-    CreateActionButton("▶ INICIAR TESTE", true, function()
+    local btnStart = CreateActionButton("▶ INICIAR TESTE", true, function()
         SimConfig.Set("SimulationActive", true)
         toggleBtn.BackgroundColor3 = THEME.ACCENT_RED
         toggleDot.Position = UDim2.new(1, -17, 0.5, -7)
@@ -1229,10 +1330,28 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         elseif key == "SimulationActive" then
             toggleBtn.BackgroundColor3 = val and THEME.ACCENT_RED or THEME.BG_INPUT
             toggleDot.Position = val and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+            fovCircle.Visible = (val == true and SimConfig.Get("ShowFovCircle") == true)
         elseif syncInputs[key] and typeof(val) == "number" then
             syncInputs[key].UpdateRatio(val)
         end
     end)
+
+    -- Funcao publica para atualizar o circulo de FOV
+    function DashboardGUI:UpdateFovCircle()
+        if not fovCircle or not fovCircle.Parent then return end
+        local active = SimConfig.Get("SimulationActive")
+        local show = SimConfig.Get("ShowFovCircle") and active
+        fovCircle.Visible = (show == true)
+        if show then
+            local fov = tonumber(SimConfig.Get("FOV")) or 70.0
+            local vp = Camera.ViewportSize
+            local halfFovRad = math.rad(fov / 2)
+            local camFovRad = math.rad(Camera.FieldOfView / 2)
+            local radius = (math.tan(halfFovRad) / math.max(math.tan(camFovRad), 0.001)) * (vp.Y / 2)
+            fovCircle.Size = UDim2.new(0, radius * 2, 0, radius * 2)
+            fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+        end
+    end
 
     -- Funcao publica para atualizar os dados de telemetria
     function DashboardGUI:UpdateTelemetryDisplay(data: any)
@@ -1250,9 +1369,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     return screenGui
 end
 
--- end of DashboardGUI
-
-
+-- =========================================================================
 -- [5/5] ORQUESTRADOR: EXECUCAO OTIMIZADA COM RASTREIO E CHAMS
 -- =========================================================================
 local guiInstance = DashboardGUI.Create()
@@ -1268,53 +1385,46 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 local isRunning = false
-local conn: RBXScriptConnection? = nil
 local lastSnapTime = 0
 local lastUiUpdate = 0
 
 -- Rastreio de velocidade anterior dos alvos para calculo do vetor aceleração
-local targetVelocityCache: { [Player]: Vector3 } = {}
-local targetLastPosCache: { [Player]: { pos: Vector3, time: number } } = {}
+local targetLastPosCache: { [Model]: { pos: Vector3, time: number } } = {}
 
--- Obtem a parte do corpo desejada com base na configuracao de osso
+-- Obtem a parte do corpo desejada com suporte universal para R15, R6 e Dummies
 local function GetBonePart(char: Model, boneSetting: string): BasePart?
-    local boneSetting = SimConfig.Get("TargetRegion") or boneSetting
-    if boneSetting == "Head" then
-        return char:FindFirstChild("Head") :: BasePart? or char:FindFirstChild("HumanoidRootPart") :: BasePart?
-    elseif boneSetting == "UpperTorso" then
-        return char:FindFirstChild("UpperTorso") :: BasePart? or char:FindFirstChild("Torso") :: BasePart? or char:FindFirstChild("HumanoidRootPart") :: BasePart?
-    elseif boneSetting == "Closest" then
-        -- Encontra o osso mais proximo do centro da tela (Crosshair)
-        local candidates = {
-            char:FindFirstChild("Head"),
-            char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"),
-            char:FindFirstChild("HumanoidRootPart")
-        }
-        local bestPart = nil
-        local bestAngle = math.huge
-        local camPos = Camera.CFrame.Position
-        local camLook = Camera.CFrame.LookVector
+    local bone = string.lower(SimConfig.Get("TargetRegion") or SimConfig.Get("TargetBone") or boneSetting or "head")
 
-        for _, part in ipairs(candidates) do
-            if part and part:IsA("BasePart") then
-                local dir = (part.Position - camPos).Unit
-                local dot = math.clamp(camLook:Dot(dir), -1.0, 1.0)
-                local angle = math.acos(dot)
-                if angle < bestAngle then
-                    bestAngle = angle
-                    bestPart = part
-                end
-            end
-        end
-        return bestPart or char:FindFirstChild("HumanoidRootPart") :: BasePart?
+    if bone == "head" then
+        return char:FindFirstChild("Head") :: BasePart?
+            or char:FindFirstChild("head") :: BasePart?
+            or char:FindFirstChild("HumanoidRootPart") :: BasePart?
+    elseif bone == "torso" or bone == "uppertorso" then
+        return char:FindFirstChild("UpperTorso") :: BasePart?
+            or char:FindFirstChild("Torso") :: BasePart?
+            or char:FindFirstChild("LowerTorso") :: BasePart?
+            or char:FindFirstChild("HumanoidRootPart") :: BasePart?
+    elseif bone == "arms" then
+        return char:FindFirstChild("RightUpperArm") :: BasePart?
+            or char:FindFirstChild("RightArm") :: BasePart?
+            or char:FindFirstChild("LeftUpperArm") :: BasePart?
+            or char:FindFirstChild("LeftArm") :: BasePart?
+            or char:FindFirstChild("UpperTorso") :: BasePart?
+    elseif bone == "legs" then
+        return char:FindFirstChild("RightUpperLeg") :: BasePart?
+            or char:FindFirstChild("RightLeg") :: BasePart?
+            or char:FindFirstChild("LeftUpperLeg") :: BasePart?
+            or char:FindFirstChild("LeftLeg") :: BasePart?
+            or char:FindFirstChild("LowerTorso") :: BasePart?
     end
-    return char:FindFirstChild("Head") :: BasePart? or char:FindFirstChild("HumanoidRootPart") :: BasePart?
+
+    return char:FindFirstChild("Head") :: BasePart?
+        or char:FindFirstChild("HumanoidRootPart") :: BasePart?
+        or char:FindFirstChildWhichIsA("BasePart") :: BasePart?
 end
 
--- Seleciona o melhor alvo dentro do FOV e atualiza ESP com WallCheck & TeamCheck
 local isRightMouseDown = false
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
+UserInputService.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = true
     end
@@ -1325,19 +1435,58 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
-local function IsTeammate(otherPlayer: Player): boolean
-    if not SimConfig.Get("TeamCheck") then return false end
+local function IsTeammate(otherPlayer: Player?): boolean
+    if not SimConfig.Get("TeamCheck") or not otherPlayer then return false end
     if LocalPlayer.Team and otherPlayer.Team then
         return LocalPlayer.Team == otherPlayer.Team
     end
     return false
 end
 
+-- Descoberta Universal de Alvos: Jogadores Reais + NPCs / Dummies de Sandbox
+local function GetAllTargetCharacters(): { Model }
+    local targets: { Model } = {}
+    local seen: { [Model]: boolean } = {}
+
+    -- 1. Jogadores reais
+    for _, other in ipairs(Players:GetPlayers()) do
+        if other ~= LocalPlayer and other.Character and not IsTeammate(other) then
+            local char = other.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                table.insert(targets, char)
+                seen[char] = true
+            end
+        end
+    end
+
+    -- 2. Dummies e NPCs no Workspace (Essencial para testes em Studio, Sandbox e jogos PvE)
+    local function ScanModels(parent: Instance)
+        for _, child in ipairs(parent:GetChildren()) do
+            if child:IsA("Model") and child ~= LocalPlayer.Character and not seen[child] then
+                local hum = child:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    if child:FindFirstChild("Head") or child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("Torso") or child:FindFirstChild("UpperTorso") then
+                        table.insert(targets, child)
+                        seen[child] = true
+                    end
+                end
+            end
+        end
+    end
+
+    ScanModels(Workspace)
+    for _, folderName in ipairs({ "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies" }) do
+        local f = Workspace:FindFirstChild(folderName)
+        if f then ScanModels(f) end
+    end
+
+    return targets
+end
+
 local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
-    local myPos = myRoot and myRoot.Position or Camera.CFrame.Position
-    local boneSetting = SimConfig.Get("TargetBone") or "Head"
-    local fov = SimConfig.Get("FOV") or 45.0
+    local boneSetting = SimConfig.Get("TargetRegion") or "Head"
+    local fov = tonumber(SimConfig.Get("FOV")) or 70.0
     local enableESP = SimConfig.Get("EnableESP")
     local visibleOnly = SimConfig.Get("VisibleOnly")
 
@@ -1350,74 +1499,59 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
     local now = os.clock()
     local camPos = Camera.CFrame.Position
     local camLook = Camera.CFrame.LookVector
+    local targets = GetAllTargetCharacters()
 
-    for _, other in ipairs(Players:GetPlayers()) do
-        if other ~= LocalPlayer and other.Character and not IsTeammate(other) then
-            local char = other.Character
-            local hum = char:FindFirstChildOfClass("Humanoid")
+    for _, char in ipairs(targets) do
+        local targetPart = GetBonePart(char, boneSetting)
 
-            -- Ignora jogadores mortos
-            if hum and hum.Health <= 0 then
+        if targetPart then
+            local currentPos = targetPart.Position
+
+            -- Calculo de velocidade vetorial V = deltaP / deltaT
+            local vel = Vector3.zero
+            local last = targetLastPosCache[char]
+            if last then
+                local dt = (now - last.time)
+                if dt > 0 and dt < 0.25 then
+                    vel = (currentPos - last.pos) / dt
+                end
+            end
+            targetLastPosCache[char] = { pos = currentPos, time = now }
+
+            -- Checagem de obstrucao de visao (WallCheck)
+            local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
+
+            -- Atualiza ESP Chams (Verde = Visivel / Vermelho = Parede)
+            if enableESP then
+                ESPVisualizer.UpdateTarget(char, obstructed, false)
+            else
                 ESPVisualizer.Clear(char)
+            end
+
+            -- Se "Apenas Visiveis" estiver ativo, ignora alvos atras da parede
+            if visibleOnly and obstructed then
                 continue
             end
 
-            local targetPart = GetBonePart(char, boneSetting)
+            -- Checagem de raio angular do FOV
+            local toTarget = (currentPos - camPos)
+            if toTarget.Magnitude > 0.5 then
+                local dir = toTarget.Unit
+                local dot = math.clamp(camLook:Dot(dir), -1.0, 1.0)
+                local angleDeg = math.deg(math.acos(dot))
 
-            if targetPart then
-                local currentPos = targetPart.Position
-
-                -- Calculo de velocidade vetorial V = deltaP / deltaT
-                local vel = Vector3.zero
-                local last = targetLastPosCache[other]
-                if last then
-                    local dt = (now - last.time)
-                    if dt > 0 and dt < 0.2 then
-                        vel = (currentPos - last.pos) / dt
-                    end
+                if angleDeg < bestAngle then
+                    bestAngle = angleDeg
+                    chosenPos = currentPos
+                    chosenVel = vel
+                    chosenModel = char
+                    isObstructed = obstructed
                 end
-                targetLastPosCache[other] = { pos = currentPos, time = now }
-
-                -- Checagem de obstrucao de visao (WallCheck)
-                local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
-
-                -- Atualiza ESP Chams (Verde = Visivel / Vermelho = Parede)
-                if enableESP then
-                    ESPVisualizer.UpdateTarget(char, obstructed, false)
-                else
-                    ESPVisualizer.Clear(char)
-                end
-
-                -- Se a opcao "Apenas Visiveis" estiver ligada, ignora quem esta atras de parede
-                if visibleOnly and obstructed then
-                    continue
-                end
-
-                -- Calcula o angulo em relacao a mira (FOV)
-                local toTarget = (currentPos - camPos)
-                if toTarget.Magnitude > 0.5 then
-                    local dir = toTarget.Unit
-                    local dot = math.clamp(camLook:Dot(dir), -1.0, 1.0)
-                    local angleDeg = math.deg(math.acos(dot))
-
-                    if angleDeg < bestAngle then
-                        bestAngle = angleDeg
-                        chosenPos = currentPos
-                        chosenVel = vel
-                        chosenModel = char
-                        isObstructed = obstructed
-                    end
-                end
-            end
-        else
-            if other ~= LocalPlayer and other.Character and IsTeammate(other) then
-                -- Limpa ESP de companheiros de equipe
-                ESPVisualizer.Clear(other.Character)
             end
         end
     end
 
-    -- Destaca o alvo focado com cor evidente no ESP
+    -- Destaca o alvo focado com destaque no ESP
     if chosenModel and enableESP then
         ESPVisualizer.UpdateTarget(chosenModel, isObstructed, true)
     end
@@ -1430,7 +1564,7 @@ local BIND_PIPELINE = "DeepHat_StandaloneCameraTracking"
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat v4.0] Simulador e Funcoes ATIVADAS! (Zero-Latency Pipeline)")
+    print("[DeepHat v4.0 PRO] Simulador ATIVADO! (Pipeline Zero-Latency com Deteccao Universal)")
 
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
 
@@ -1438,7 +1572,12 @@ DashboardGUI.OnStartRequested = function()
         local targetPos, targetVel, targetModel, obstructed = GetTargetData()
         local now = os.clock()
 
-        local shouldAim = isRunning and (isRightMouseDown or not SimConfig.Get("HoldToAim"))
+        -- Atualiza o circulo de FOV visual
+        DashboardGUI:UpdateFovCircle()
+
+        local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        local holdToAim = SimConfig.Get("HoldToAim") == true
+        local shouldAim = isRunning and (not holdToAim or isRmbHeld)
 
         if targetPos and shouldAim then
             local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
@@ -1453,20 +1592,24 @@ DashboardGUI.OnStartRequested = function()
             end
 
             -- Rastreamento instantaneo no frame sem congelamento ou atraso
-            Camera.CFrame = telem.cframe
+            if telem and telem.cframe then
+                Camera.CFrame = telem.cframe
+            end
 
             if (now - lastUiUpdate) >= 0.066 then
                 lastUiUpdate = now
+                telem.dt = dt
                 DashboardGUI:UpdateTelemetryDisplay(telem)
             end
         else
-            if (now - lastUiUpdate) >= 0.2 then
+            if (now - lastUiUpdate) >= 0.15 then
                 lastUiUpdate = now
                 DashboardGUI:UpdateTelemetryDisplay({
                     angularVelocity = 0,
                     isObstructed = false,
-                    mode = "LIVRE",
-                    suspicionScore = 0
+                    mode = isRunning and "LIVRE (BUSCANDO)" or "PARADO",
+                    suspicionScore = 0,
+                    dt = dt
                 })
             end
         end
@@ -1477,38 +1620,43 @@ DashboardGUI.OnStopRequested = function()
     if not isRunning then return end
     isRunning = false
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
-    if conn then conn:Disconnect(); conn = nil end
     ESPVisualizer.ClearAll()
-    print("[DeepHat v4.0] Simulador PARADO!")
+    DashboardGUI:UpdateFovCircle()
+    print("[DeepHat v4.0 PRO] Simulador PARADO!")
     DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO", suspicionScore = 0 })
 end
 
 DashboardGUI.OnResetRequested = function()
-    print("[DeepHat v4.0] Parametros resetados para Normal!")
+    print("[DeepHat v4.0 PRO] Parametros resetados para Normal!")
 end
 
-DashboardGUI.OnExportRequested = function()
-    Kinematics:ExportReport()
+DashboardGUI.OnSaveRequested = function()
+    print("[DeepHat v4.0 PRO] Configuracoes salvas!")
 end
 
 _G.DeepHat_Cleanup = function()
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
-    if conn then conn:Disconnect(); conn = nil end
     ESPVisualizer.ClearAll()
     if guiInstance and guiInstance.Parent then guiInstance:Destroy() end
 end
 
--- Limpa ESP se jogadores sairem
 Players.PlayerRemoving:Connect(function(plr)
     if plr.Character then ESPVisualizer.Clear(plr.Character) end
-    targetLastPosCache[plr] = nil
+    targetLastPosCache[plr.Character] = nil
 end)
 
--- Limpa ESP se o usuario desativar o toggle na interface
 SimConfig.Subscribe("EnableESP", function(enabled)
     if not enabled then
         ESPVisualizer.ClearAll()
     end
+end)
+
+SimConfig.Subscribe("ShowFovCircle", function()
+    DashboardGUI:UpdateFovCircle()
+end)
+
+SimConfig.Subscribe("FOV", function()
+    DashboardGUI:UpdateFovCircle()
 end)
 
 -- Inicia automaticamente todas as funcoes para funcionar direto ao injetar!
@@ -1516,13 +1664,12 @@ task.defer(function()
     DashboardGUI.OnStartRequested()
 end)
 
-print("[DeepHat v4.0] Suite Pro com Previsao Balistica, Chams ESP, WallCheck e AimLock carregada! [HOME] para abrir/fechar.")
+print("[DeepHat v4.0 PRO] Carregamento completo! Pressione [HOME] para abrir/fechar a interface.")
 
--- Notificacao no chat / console para confirmar carregamento
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "DeepHat v4.0 PRO",
-        Text = "Aim + WallCheck + ESP ativos! Segure o Botão Direito para mirar.",
+        Text = "Interface e Motor ATIVOS! Pressione [HOME] para abrir/fechar.",
         Duration = 6
     })
 end)

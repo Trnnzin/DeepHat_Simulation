@@ -1,42 +1,27 @@
-﻿--!strict
---[[
-    ============================================================================
-    MODULO: DashboardGUI
-    DESIGN: UI/UX Dark Theme Minimalista com Red Accents (Alta Densidade)
-    ARQUITETURA: 3 Colunas + Observer Pattern integrado com SimConfig
-    ============================================================================
---]]
-
-local SimConfig = require(script.Parent.SimConfig)
-
-local UserInputService = game:GetService("UserInputService")
-local CoreGui = game:GetService("CoreGui")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-
+-- =========================================================================
+-- [4/5] MODULO: DashboardGUI (Interface Profissional Dark Theme 3-Colunas)
+-- =========================================================================
 local DashboardGUI = {}
 DashboardGUI.__index = DashboardGUI
 
 -- [PALETA DE DESIGN TOKENS]
 local THEME = {
-    BG_MAIN = Color3.fromRGB(13, 14, 17),
-    BG_PANEL = Color3.fromRGB(20, 22, 27),
-    BG_INPUT = Color3.fromRGB(26, 29, 36),
-    BORDER = Color3.fromRGB(38, 42, 53),
-    TEXT_MAIN = Color3.fromRGB(237, 237, 237),
-    TEXT_MUTED = Color3.fromRGB(125, 132, 148),
+    BG_MAIN = Color3.fromRGB(13, 14, 18),
+    BG_PANEL = Color3.fromRGB(19, 21, 26),
+    BG_INPUT = Color3.fromRGB(25, 28, 35),
+    BORDER = Color3.fromRGB(36, 40, 50),
+    TEXT_MAIN = Color3.fromRGB(240, 240, 240),
+    TEXT_MUTED = Color3.fromRGB(120, 128, 142),
     ACCENT_RED = Color3.fromRGB(224, 43, 54),
-    ACCENT_HOVER = Color3.fromRGB(255, 77, 88),
+    ACCENT_HOVER = Color3.fromRGB(255, 65, 75),
     SUCCESS = Color3.fromRGB(46, 204, 113),
 }
 
--- Callbacks publicos para o orquestrador (Bootstrap)
 DashboardGUI.OnStartRequested = nil :: (() -> ())?
 DashboardGUI.OnStopRequested = nil :: (() -> ())?
 DashboardGUI.OnResetRequested = nil :: (() -> ())?
 DashboardGUI.OnSaveRequested = nil :: (() -> ())?
 
--- Utilitarios de construcao
 local function AddCorner(parent: Instance, radius: number): UICorner
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, radius)
@@ -54,34 +39,22 @@ local function AddStroke(parent: Instance, color: Color3, thickness: number?): U
 end
 
 function DashboardGUI.Create(parentGui: Instance?): ScreenGui
-    local hostParent = parentGui or (RunService:IsStudio() and Players.LocalPlayer:WaitForChild("PlayerGui") or CoreGui)
-
-    
-    -- Purga completa de qualquer interface legada para evitar sobreposicoes ou Z-Index issues
-    local function PurgeAllLegacyUIs()
-        local containers = {}
-        pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
-        local pGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if pGui then table.insert(containers, pGui) end
-
-        local targetNames = {
-            "DiagnosticSimulationDashboard",
-            "KinematicsSimulationDashboard",
-            "DeepHat_GUI",
-            "FovCircleOverlay"
-        }
-
-        for _, container in ipairs(containers) do
-            for _, name in ipairs(targetNames) do
-                local found = container:FindFirstChild(name)
-                while found do
-                    pcall(function() found:Destroy() end)
-                    found = container:FindFirstChild(name)
-                end
-            end
+    local function GetSafeGuiParent(): Instance
+        local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
+        if ok and coreGui then
+            local testOk = pcall(function()
+                local test = Instance.new("Folder")
+                test.Parent = coreGui
+                test:Destroy()
+            end)
+            if testOk then return coreGui end
         end
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+        if playerGui then return playerGui end
+        return CoreGuiService
     end
-    PurgeAllLegacyUIs()
+
+    local hostParent = parentGui or GetSafeGuiParent()
 
     local existing = hostParent:FindFirstChild("DiagnosticSimulationDashboard")
     if existing then existing:Destroy() end
@@ -90,13 +63,33 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     screenGui.Name = "DiagnosticSimulationDashboard"
     screenGui.ResetOnSpawn = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.DisplayOrder = 9999
     screenGui.Parent = hostParent
+
+    -- Circulo Dinamico de FOV na Tela
+    local fovCircle = Instance.new("Frame")
+    fovCircle.Name = "FovCircleOverlay"
+    fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+    fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fovCircle.BackgroundTransparency = 1
+    fovCircle.Visible = SimConfig.Get("ShowFovCircle") == true
+    fovCircle.Parent = screenGui
+    AddCorner(fovCircle, 9999)
+    local fovStroke = AddStroke(fovCircle, THEME.ACCENT_RED, 1.5)
+    fovStroke.Transparency = 0.35
+
+    local fovCenterDot = Instance.new("Frame")
+    fovCenterDot.Size = UDim2.new(0, 4, 0, 4)
+    fovCenterDot.AnchorPoint = Vector2.new(0.5, 0.5)
+    fovCenterDot.Position = UDim2.new(0.5, 0, 0.5, 0)
+    fovCenterDot.BackgroundColor3 = THEME.ACCENT_RED
+    fovCenterDot.BackgroundTransparency = 0.2
+    fovCenterDot.Parent = fovCircle
+    AddCorner(fovCenterDot, 2)
 
     -- Janela Principal (Compacta, 3 Colunas, Draggable)
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 860, 0, 530)
+    mainFrame.Size = UDim2.new(0, 880, 0, 520)
     mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
     mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     mainFrame.BackgroundColor3 = THEME.BG_MAIN
@@ -147,7 +140,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Titulo e Botoes de Janela
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(0.7, 0, 1, 0)
+    title.Size = UDim2.new(0.65, 0, 1, 0)
     title.Position = UDim2.new(0, 14, 0, 0)
     title.BackgroundTransparency = 1
     title.Font = Enum.Font.GothamBold
@@ -158,8 +151,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     title.Parent = header
 
     local hotkeyNotice = Instance.new("TextLabel")
-    hotkeyNotice.Size = UDim2.new(0, 140, 1, 0)
-    hotkeyNotice.Position = UDim2.new(1, -190, 0, 0)
+    hotkeyNotice.Size = UDim2.new(0, 150, 1, 0)
+    hotkeyNotice.Position = UDim2.new(1, -195, 0, 0)
     hotkeyNotice.BackgroundTransparency = 1
     hotkeyNotice.Font = Enum.Font.GothamMedium
     hotkeyNotice.TextSize = 10
@@ -208,9 +201,9 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local syncInputs: { [string]: { Input: TextBox, UpdateRatio: (number) -> () } } = {}
 
     --[[
-        Componente de Slider com Input Numerico Sincronizado
+        Componente de Slider com Input Numerico Sincronizado (Sem sobreposicao)
     --]]
-    local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number): Frame
+    local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number, layoutOrder: number?): Frame
         minVal = tonumber(minVal) or 0
         maxVal = tonumber(maxVal) or 100
         step = tonumber(step) or 1
@@ -219,27 +212,34 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         local span = math.max(maxVal - minVal, 0.0001)
 
         local container = Instance.new("Frame")
-        container.Size = UDim2.new(1, 0, 0, 44)
+        container.Name = "Slider_" .. configKey
+        container.Size = UDim2.new(1, 0, 0, 42)
         container.BackgroundTransparency = 1
+        container.LayoutOrder = layoutOrder or 10
         container.Parent = parent
 
         local headerRow = Instance.new("Frame")
-        headerRow.Size = UDim2.new(1, 0, 0, 20)
+        headerRow.Size = UDim2.new(1, 0, 0, 18)
         headerRow.BackgroundTransparency = 1
         headerRow.Parent = container
 
+        -- Titulo à esquerda (nunca se sobrepoe)
         local titleLabel = Instance.new("TextLabel")
-        titleLabel.Size = UDim2.new(0.65, 0, 1, 0)
+        titleLabel.Size = UDim2.new(1, -55, 1, 0)
+        titleLabel.Position = UDim2.new(0, 0, 0, 0)
         titleLabel.BackgroundTransparency = 1
         titleLabel.Font = Enum.Font.GothamMedium
         titleLabel.TextSize = 11
         titleLabel.TextColor3 = THEME.TEXT_MAIN
         titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
         titleLabel.Text = labelText
         titleLabel.Parent = headerRow
 
+        -- Input numerico à direita (badge compacto de alta precisao)
         local inputBox = Instance.new("TextBox")
-        inputBox.Size = UDim2.new(0.35, 0, 1, 0)
+        inputBox.Size = UDim2.new(0, 50, 1, 0)
+        inputBox.Position = UDim2.new(1, -50, 0, 0)
         inputBox.BackgroundColor3 = THEME.BG_INPUT
         inputBox.TextColor3 = THEME.ACCENT_RED
         inputBox.Font = Enum.Font.GothamBold
@@ -250,9 +250,10 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         AddCorner(inputBox, 4)
         AddStroke(inputBox, THEME.BORDER, 1)
 
+        -- Barra do Slider (Trilho)
         local track = Instance.new("Frame")
         track.Size = UDim2.new(1, 0, 0, 6)
-        track.Position = UDim2.new(0, 0, 0, 28)
+        track.Position = UDim2.new(0, 0, 0, 24)
         track.BackgroundColor3 = THEME.BG_INPUT
         track.Parent = container
         AddCorner(track, 3)
@@ -300,7 +301,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         track.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then
                 isSliderDragging = true
-                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+                local trackWidth = math.max(track.AbsoluteSize.X, 1)
+                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / trackWidth, 0, 1)
                 applyVal(minVal + relX * (maxVal - minVal))
             end
         end)
@@ -313,7 +315,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
         UserInputService.InputChanged:Connect(function(input)
             if isSliderDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+                local trackWidth = math.max(track.AbsoluteSize.X, 1)
+                local relX = math.clamp((input.Position.X - track.AbsolutePosition.X) / trackWidth, 0, 1)
                 applyVal(minVal + relX * (maxVal - minVal))
             end
         end)
@@ -332,23 +335,29 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- COLUNA 1: Configuracoes de Vetores e Direcao
     -- =========================================================================
     local col1 = Instance.new("ScrollingFrame")
+    col1.Name = "Col1_Vectors"
     col1.BackgroundColor3 = THEME.BG_PANEL
     col1.ScrollBarThickness = 3
     col1.ScrollBarImageColor3 = THEME.BORDER
-    col1.CanvasSize = UDim2.new(0, 0, 0, 390)
+    col1.CanvasSize = UDim2.new(0, 0, 0, 0)
+    col1.AutomaticCanvasSize = Enum.AutomaticSize.Y
     col1.Parent = contentArea
     AddCorner(col1, 6)
     AddStroke(col1, THEME.BORDER, 1)
 
     local list1 = Instance.new("UIListLayout")
-    list1.Padding = UDim.new(0, 6)
+    list1.Padding = UDim.new(0, 8)
+    list1.SortOrder = Enum.SortOrder.LayoutOrder
     list1.Parent = col1
 
     local pad1 = Instance.new("UIPadding")
-    pad1.PaddingTop = UDim.new(0, 10); pad1.PaddingLeft = UDim.new(0, 10); pad1.PaddingRight = UDim.new(0, 10)
+    pad1.PaddingTop = UDim.new(0, 10); pad1.PaddingBottom = UDim.new(0, 10)
+    pad1.PaddingLeft = UDim.new(0, 10); pad1.PaddingRight = UDim.new(0, 10)
     pad1.Parent = col1
 
     local col1Title = Instance.new("TextLabel")
+    col1Title.Name = "00_Title"
+    col1Title.LayoutOrder = 1
     col1Title.Size = UDim2.new(1, 0, 0, 18)
     col1Title.BackgroundTransparency = 1
     col1Title.Font = Enum.Font.GothamBold
@@ -360,6 +369,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Toggle de Ativacao
     local toggleRow = Instance.new("Frame")
+    toggleRow.Name = "01_ToggleRow"
+    toggleRow.LayoutOrder = 2
     toggleRow.Size = UDim2.new(1, 0, 0, 28)
     toggleRow.BackgroundTransparency = 1
     toggleRow.Parent = col1
@@ -396,37 +407,48 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         SimConfig.Set("SimulationActive", newState)
         toggleBtn.BackgroundColor3 = newState and THEME.ACCENT_RED or THEME.BG_INPUT
         toggleDot.Position = newState and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+        if newState then
+            if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
+        else
+            if DashboardGUI.OnStopRequested then DashboardGUI.OnStopRequested() end
+        end
     end)
 
-    CreateSliderField(col1, "Ângulo de Campo (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
-    CreateSliderField(col1, "Coeficiente de Suavização", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
-    CreateSliderField(col1, "Velocidade Rotação (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5)
-    CreateSliderField(col1, "Tempo de Resposta (ms)", "ResponseTime", 0, 250, SimConfig.Get("ResponseTime"), 1)
-    CreateSliderField(col1, "Precisão de Trajetória (%)", "TrajectoryPrecision", 50, 100, SimConfig.Get("TrajectoryPrecision"), 0.5)
-    CreateSliderField(col1, "Frequência Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5)
-    CreateSliderField(col1, "Raio de Atuação (m)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
+    CreateSliderField(col1, "Ângulo de Campo (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1, 3)
+    CreateSliderField(col1, "Coeficiente de Suavização", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01, 4)
+    CreateSliderField(col1, "Velocidade Rotação (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5, 5)
+    CreateSliderField(col1, "Tempo de Resposta (ms)", "ResponseTime", 0, 250, SimConfig.Get("ResponseTime"), 1, 6)
+    CreateSliderField(col1, "Precisão de Trajetória (%)", "TrajectoryPrecision", 50, 100, SimConfig.Get("TrajectoryPrecision"), 0.5, 7)
+    CreateSliderField(col1, "Frequência Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5, 8)
+    CreateSliderField(col1, "Raio de Atuação (m)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5, 9)
 
     -- =========================================================================
     -- COLUNA 2: Parametros de Comportamento do Sistema
     -- =========================================================================
     local col2 = Instance.new("ScrollingFrame")
+    col2.Name = "Col2_Behavior"
     col2.BackgroundColor3 = THEME.BG_PANEL
     col2.ScrollBarThickness = 3
     col2.ScrollBarImageColor3 = THEME.BORDER
-    col2.CanvasSize = UDim2.new(0, 0, 0, 390)
+    col2.CanvasSize = UDim2.new(0, 0, 0, 0)
+    col2.AutomaticCanvasSize = Enum.AutomaticSize.Y
     col2.Parent = contentArea
     AddCorner(col2, 6)
     AddStroke(col2, THEME.BORDER, 1)
 
     local list2 = Instance.new("UIListLayout")
-    list2.Padding = UDim.new(0, 6)
+    list2.Padding = UDim.new(0, 8)
+    list2.SortOrder = Enum.SortOrder.LayoutOrder
     list2.Parent = col2
 
     local pad2 = Instance.new("UIPadding")
-    pad2.PaddingTop = UDim.new(0, 10); pad2.PaddingLeft = UDim.new(0, 10); pad2.PaddingRight = UDim.new(0, 10)
+    pad2.PaddingTop = UDim.new(0, 10); pad2.PaddingBottom = UDim.new(0, 10)
+    pad2.PaddingLeft = UDim.new(0, 10); pad2.PaddingRight = UDim.new(0, 10)
     pad2.Parent = col2
 
     local col2Title = Instance.new("TextLabel")
+    col2Title.Name = "00_Title"
+    col2Title.LayoutOrder = 1
     col2Title.Size = UDim2.new(1, 0, 0, 18)
     col2Title.BackgroundTransparency = 1
     col2Title.Font = Enum.Font.GothamBold
@@ -438,6 +460,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Abas de Selecao de Perfil
     local profileBar = Instance.new("Frame")
+    profileBar.Name = "01_ProfileBar"
+    profileBar.LayoutOrder = 2
     profileBar.Size = UDim2.new(1, 0, 0, 26)
     profileBar.BackgroundColor3 = THEME.BG_INPUT
     profileBar.Parent = col2
@@ -475,17 +499,18 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end)
     end
 
-    CreateSliderField(col2, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1)
-    CreateSliderField(col2, "Intensidade de Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1)
-    CreateSliderField(col2, "Velocidade Deslocamento", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1)
-    CreateSliderField(col2, "Gradiente de Aceleração", "AccelerationCurve", 0.2, 3.0, SimConfig.Get("AccelerationCurve"), 0.05)
-    CreateSliderField(col2, "Duração do Ciclo (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5)
-    CreateSliderField(col2, "Agentes Simultâneos", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1)
+    CreateSliderField(col2, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1, 3)
+    CreateSliderField(col2, "Intensidade de Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1, 4)
+    CreateSliderField(col2, "Velocidade Deslocamento", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1, 5)
+    CreateSliderField(col2, "Gradiente de Aceleração", "AccelerationCurve", 0.2, 3.0, SimConfig.Get("AccelerationCurve"), 0.05, 6)
+    CreateSliderField(col2, "Duração do Ciclo (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5, 7)
+    CreateSliderField(col2, "Agentes Simultâneos", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1, 8)
 
     -- =========================================================================
     -- COLUNA 3: Mapeamento de Regioes (HitBox Coords) & Telemetria
     -- =========================================================================
     local col3 = Instance.new("Frame")
+    col3.Name = "Col3_Coords"
     col3.BackgroundColor3 = THEME.BG_PANEL
     col3.Parent = contentArea
     AddCorner(col3, 6)
@@ -504,7 +529,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Canvas do Manequim / Dummy
     local dummyCanvas = Instance.new("Frame")
-    dummyCanvas.Size = UDim2.new(1, -20, 0.55, 0)
+    dummyCanvas.Size = UDim2.new(1, -20, 0.52, 0)
     dummyCanvas.Position = UDim2.new(0, 10, 0, 32)
     dummyCanvas.BackgroundColor3 = THEME.BG_INPUT
     dummyCanvas.Parent = col3
@@ -541,8 +566,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     legLineR.Parent = dummyCanvas
 
     local activeRegionBadge = Instance.new("TextLabel")
-    activeRegionBadge.Size = UDim2.new(1, -20, 0, 22)
-    activeRegionBadge.Position = UDim2.new(0, 10, 0.55, 38)
+    activeRegionBadge.Size = UDim2.new(1, -20, 0, 24)
+    activeRegionBadge.Position = UDim2.new(0, 10, 0.52, 38)
     activeRegionBadge.BackgroundColor3 = THEME.BG_INPUT
     activeRegionBadge.Font = Enum.Font.GothamBold
     activeRegionBadge.TextSize = 10
@@ -583,6 +608,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
         node.MouseButton1Click:Connect(function()
             SimConfig.Set("TargetRegion", n.Name)
+            SimConfig.Set("TargetBone", n.Name)
             UpdateRegionHighlights(n.Name)
         end)
     end
@@ -653,7 +679,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         return btn
     end
 
-    CreateActionButton("↺ RESETAR", false, function()
+    local btnReset = CreateActionButton("↺ RESETAR", false, function()
         SimConfig.LoadProfile("Normal")
         UpdateProfileHighlights("Normal")
         if DashboardGUI.OnResetRequested then
@@ -661,13 +687,20 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end
     end)
 
-    CreateActionButton("💾 SALVAR CONFIG", false, function()
+    local btnSave = CreateActionButton("💾 SALVAR CONFIG", false, function()
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "DeepHat Suite",
+                Text = "Configurações salvas com sucesso!",
+                Duration = 3
+            })
+        end)
         if DashboardGUI.OnSaveRequested then
             DashboardGUI.OnSaveRequested()
         end
     end)
 
-    CreateActionButton("⏹ PARAR", false, function()
+    local btnStop = CreateActionButton("⏹ PARAR", false, function()
         SimConfig.Set("SimulationActive", false)
         toggleBtn.BackgroundColor3 = THEME.BG_INPUT
         toggleDot.Position = UDim2.new(0, 3, 0.5, -7)
@@ -676,7 +709,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         end
     end)
 
-    CreateActionButton("▶ INICIAR TESTE", true, function()
+    local btnStart = CreateActionButton("▶ INICIAR TESTE", true, function()
         SimConfig.Set("SimulationActive", true)
         toggleBtn.BackgroundColor3 = THEME.ACCENT_RED
         toggleDot.Position = UDim2.new(1, -17, 0.5, -7)
@@ -694,10 +727,28 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         elseif key == "SimulationActive" then
             toggleBtn.BackgroundColor3 = val and THEME.ACCENT_RED or THEME.BG_INPUT
             toggleDot.Position = val and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+            fovCircle.Visible = (val == true and SimConfig.Get("ShowFovCircle") == true)
         elseif syncInputs[key] and typeof(val) == "number" then
             syncInputs[key].UpdateRatio(val)
         end
     end)
+
+    -- Funcao publica para atualizar o circulo de FOV
+    function DashboardGUI:UpdateFovCircle()
+        if not fovCircle or not fovCircle.Parent then return end
+        local active = SimConfig.Get("SimulationActive")
+        local show = SimConfig.Get("ShowFovCircle") and active
+        fovCircle.Visible = (show == true)
+        if show then
+            local fov = tonumber(SimConfig.Get("FOV")) or 70.0
+            local vp = Camera.ViewportSize
+            local halfFovRad = math.rad(fov / 2)
+            local camFovRad = math.rad(Camera.FieldOfView / 2)
+            local radius = (math.tan(halfFovRad) / math.max(math.tan(camFovRad), 0.001)) * (vp.Y / 2)
+            fovCircle.Size = UDim2.new(0, radius * 2, 0, radius * 2)
+            fovCircle.Position = UDim2.new(0.5, 0, 0.5, 0)
+        end
+    end
 
     -- Funcao publica para atualizar os dados de telemetria
     function DashboardGUI:UpdateTelemetryDisplay(data: any)
