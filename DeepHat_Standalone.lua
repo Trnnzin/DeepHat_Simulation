@@ -204,7 +204,7 @@ do
         self.NoiseSeed = math.random(1000, 9999)
 
         local rayParams = RaycastParams.new()
-        rayParams.FilterType = RaycastFilterType.Exclude
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
         rayParams.FilterDescendantsInstances = filterInstances or {}
         rayParams.IgnoreWater = true
         self.RayParams = rayParams
