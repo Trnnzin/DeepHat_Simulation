@@ -1,9 +1,14 @@
 --!strict
--- DeepHat_Standalone.lua
--- Versao Otimizada (High-Performance Single-File) para Execucao Remota via HttpGet / loadstring
--- Melhorias: Throttling de UI (zero lag), Raycast otimizado, Drag suave moderno e Garbage Collection reduzido.
+-- DeepHat_Standalone.lua (v3.0 - Professional Suite)
+-- Motor de Simulacao de Cinematica 3D, Deteccao de Anomalias e Painel UX Dark Mode
+-- Recursos Avancados:
+-- 1. Circulo de FOV Dinamico na Tela (Redimensiona em tempo real)
+-- 2. Termometro de Anomalia / Suspeicao em Tempo Real (0% a 100% com barra colorida)
+-- 3. Tecla de Atalho (RightShift / Insert) para Minimizar / Restaurar a Interface
+-- 4. Modos de Priorizacao de Alvo: Mais Proximo da Mira (Crosshair) ou Distancia 3D
+-- 5. Exportador de Relatorio Estatistico de Telemetria no Console
+-- 6. Throttling de UI a 10Hz e Zero-Allocation de Memoria (Zero Lag)
 
--- Limpeza de instancia anterior caso re-executado
 if _G.DeepHat_Cleanup then
     pcall(_G.DeepHat_Cleanup)
 end
@@ -18,16 +23,16 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 -- =========================================================================
--- [1/3] MODULO: SimConfig (Central de Parametros + Observer Pattern)
+-- [1/4] MODULO: SimConfig (Central de Parametros + Observer Pattern)
 -- =========================================================================
 local SimConfig = {}
 do
     local PROFILES = {
-        ["Normal"] = { FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, SnapFrequency = 0.03, ReactionTime = 0.22, Intensity = 1.0, ActiveProfile = "Normal" },
-        ["Leve"] = { FOV = 30.0, Smoothing = 0.25, SpeedMultiplier = 0.75, TrackingPrecision = 0.98, SnapFrequency = 0.00, ReactionTime = 0.28, Intensity = 0.6, ActiveProfile = "Leve" },
-        ["Medio"] = { FOV = 60.0, Smoothing = 0.09, SpeedMultiplier = 1.4, TrackingPrecision = 0.90, SnapFrequency = 0.15, ReactionTime = 0.15, Intensity = 1.3, ActiveProfile = "Medio" },
-        ["Agressivo"] = { FOV = 90.0, Smoothing = 0.02, SpeedMultiplier = 2.2, TrackingPrecision = 0.75, SnapFrequency = 0.65, ReactionTime = 0.05, Intensity = 2.0, ActiveProfile = "Agressivo" },
-        ["Custom"] = { FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, SnapFrequency = 0.03, ReactionTime = 0.20, Intensity = 1.0, ActiveProfile = "Custom" }
+        ["Normal"] = { FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, SnapFrequency = 0.03, ReactionTime = 0.22, Intensity = 1.0, TargetMode = "Crosshair", ShowFovCircle = true, ActiveProfile = "Normal" },
+        ["Leve"] = { FOV = 30.0, Smoothing = 0.25, SpeedMultiplier = 0.75, TrackingPrecision = 0.98, SnapFrequency = 0.00, ReactionTime = 0.28, Intensity = 0.6, TargetMode = "Crosshair", ShowFovCircle = true, ActiveProfile = "Leve" },
+        ["Medio"] = { FOV = 60.0, Smoothing = 0.09, SpeedMultiplier = 1.4, TrackingPrecision = 0.90, SnapFrequency = 0.15, ReactionTime = 0.15, Intensity = 1.3, TargetMode = "Crosshair", ShowFovCircle = true, ActiveProfile = "Medio" },
+        ["Agressivo"] = { FOV = 90.0, Smoothing = 0.02, SpeedMultiplier = 2.2, TrackingPrecision = 0.75, SnapFrequency = 0.65, ReactionTime = 0.05, Intensity = 2.0, TargetMode = "Crosshair", ShowFovCircle = true, ActiveProfile = "Agressivo" },
+        ["Custom"] = { FOV = 45.0, Smoothing = 0.14, SpeedMultiplier = 1.0, TrackingPrecision = 0.95, SnapFrequency = 0.03, ReactionTime = 0.20, Intensity = 1.0, TargetMode = "Crosshair", ShowFovCircle = true, ActiveProfile = "Custom" }
     }
 
     local CurrentState = table.clone(PROFILES["Normal"])
@@ -90,7 +95,7 @@ do
 end
 
 -- =========================================================================
--- [2/3] MODULO: AdvancedKinematics (Motor Fisico de Alta Performance)
+-- [2/4] MODULO: AdvancedKinematics (Motor Fisico e Analise Estatistica)
 -- =========================================================================
 local AdvancedKinematics = {}
 AdvancedKinematics.__index = AdvancedKinematics
@@ -105,6 +110,7 @@ do
         local self = setmetatable({}, AdvancedKinematics)
         self.CurrentCFrame = initialCFrame or CFrame.new(0, 5, 0)
         self.PreviousLookVector = self.CurrentCFrame.LookVector
+        self.PreviousAngularVelocity = 0
         self.NoiseSeed = math.random(1000, 9999)
 
         local rayParams = RaycastParams.new()
@@ -114,9 +120,25 @@ do
         self.RayParams = rayParams
 
         self.CachedTelemetry = {
-            angularVelocity = 0, isObstructed = false, position = Vector3.zero,
-            cframe = self.CurrentCFrame, mode = "SMOOTH", angularErrorDeg = 0
+            angularVelocity = 0,
+            angularJerk = 0,
+            suspicionScore = 0,
+            isObstructed = false,
+            position = Vector3.zero,
+            cframe = self.CurrentCFrame,
+            mode = "SMOOTH",
+            angularErrorDeg = 0
         }
+
+        -- Historico para metricas estatisticas
+        self.MetricsHistory = {
+            totalSamples = 0,
+            sumVelocity = 0,
+            peakVelocity = 0,
+            snapCount = 0,
+            obstructedCount = 0
+        }
+
         return self
     end
 
@@ -130,6 +152,24 @@ do
         return (workspace:Raycast(fromPos, dir, self.RayParams) ~= nil)
     end
 
+    -- Calcula o Score de Suspeicao (0 a 100) baseado em picos e inercia
+    function AdvancedKinematics:EvaluateSuspicion(angVel: number, jerk: number, isSnap: boolean, obstructed: boolean): number
+        local score = 0
+        if isSnap then
+            score = score + 45
+        end
+        if angVel > 350 then
+            score = score + math.clamp((angVel - 350) / 10, 0, 30)
+        end
+        if jerk > 4000 then
+            score = score + 15
+        end
+        if obstructed and angVel > 20 then
+            score = score + 10
+        end
+        return math.clamp(math.floor(score), 0, 100)
+    end
+
     function AdvancedKinematics:StepSnap(targetPosition: Vector3, dt: number)
         local eyePos = self.CurrentCFrame.Position
         local toTarget = (targetPosition - eyePos)
@@ -140,9 +180,25 @@ do
 
         self.CurrentCFrame = CFrame.lookAt(eyePos, targetPosition)
         local safeDt = (dt and dt > 0) and dt or 0.0166
+        local angVel = angularErrorDeg / safeDt
 
-        self.CachedTelemetry.angularVelocity = angularErrorDeg / safeDt
-        self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
+        local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
+        self.PreviousAngularVelocity = angVel
+
+        local isObstructed = self:CheckObstruction(eyePos, targetPosition)
+        local suspicion = self:EvaluateSuspicion(angVel, jerk, true, isObstructed)
+
+        -- Atualiza historico
+        self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
+        self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
+        self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
+        self.MetricsHistory.snapCount = self.MetricsHistory.snapCount + 1
+        if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
+
+        self.CachedTelemetry.angularVelocity = angVel
+        self.CachedTelemetry.angularJerk = jerk
+        self.CachedTelemetry.suspicionScore = suspicion
+        self.CachedTelemetry.isObstructed = isObstructed
         self.CachedTelemetry.position = eyePos
         self.CachedTelemetry.cframe = self.CurrentCFrame
         self.CachedTelemetry.mode = "SNAP"
@@ -168,6 +224,8 @@ do
 
         if angularErrorDeg > fov then
             self.CachedTelemetry.angularVelocity = 0
+            self.CachedTelemetry.angularJerk = 0
+            self.CachedTelemetry.suspicionScore = 0
             self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
             self.CachedTelemetry.position = eyePos
             self.CachedTelemetry.cframe = self.CurrentCFrame
@@ -194,26 +252,58 @@ do
         local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
         local safeDt = (dt and dt > 0) and dt or 0.0166
         local angVel = math.deg(math.acos(deltaDot)) / safeDt
+        local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
+        self.PreviousAngularVelocity = angVel
         self.PreviousLookVector = newLook
 
+        local isObstructed = self:CheckObstruction(eyePos, targetPosition)
+        local suspicion = self:EvaluateSuspicion(angVel, jerk, false, isObstructed)
+
+        self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
+        self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
+        self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
+        if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
+
         self.CachedTelemetry.angularVelocity = angVel
-        self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
+        self.CachedTelemetry.angularJerk = jerk
+        self.CachedTelemetry.suspicionScore = suspicion
+        self.CachedTelemetry.isObstructed = isObstructed
         self.CachedTelemetry.position = eyePos
         self.CachedTelemetry.cframe = self.CurrentCFrame
         self.CachedTelemetry.mode = "SMOOTH"
         self.CachedTelemetry.angularErrorDeg = angularErrorDeg
         return self.CachedTelemetry
     end
+
+    function AdvancedKinematics:ExportReport()
+        local hist = self.MetricsHistory
+        local avg = hist.totalSamples > 0 and (hist.sumVelocity / hist.totalSamples) or 0
+        local obsRatio = hist.totalSamples > 0 and (hist.obstructedCount / hist.totalSamples * 100) or 0
+        local snapRatio = hist.totalSamples > 0 and (hist.snapCount / hist.totalSamples * 100) or 0
+
+        print("
+=======================================================")
+        print("          RELATORIO DE TELEMETRIA DE AGENTE 3D         ")
+        print("=======================================================")
+        print(string.format("  Total de Quadros Amostrados: %d", hist.totalSamples))
+        print(string.format("  Velocidade Angular Media:    %.2f deg/s", avg))
+        print(string.format("  Pico de Velocidade Angular:  %.2f deg/s", hist.peakVelocity))
+        print(string.format("  Proporcao de Snaps Bruscos:  %.1f%%", snapRatio))
+        print(string.format("  Rastreamento Ocluido/Parede: %.1f%%", obsRatio))
+        print("=======================================================
+")
+    end
 end
 
 -- =========================================================================
--- [3/3] MODULO: DashboardGUI (Interface Dark Mode Moderna & Drag Estavel)
+-- [3/4] MODULO: DashboardGUI (Interface UX Completa + FOV Overlay)
 -- =========================================================================
 local DashboardGUI = {}
 do
     DashboardGUI.OnStartRequested = nil
     DashboardGUI.OnStopRequested = nil
     DashboardGUI.OnResetRequested = nil
+    DashboardGUI.OnExportRequested = nil
 
     local function AddCorner(parent: Instance, radius: number)
         local corner = Instance.new("UICorner")
@@ -243,10 +333,48 @@ do
         screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         screenGui.Parent = hostParent
 
+        -- =================================================================
+        -- Círculo Visualizador de FOV (Overlay na Tela)
+        -- =================================================================
+        local fovCircleFrame = Instance.new("Frame")
+        fovCircleFrame.Name = "FovCircleOverlay"
+        fovCircleFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+        fovCircleFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+        fovCircleFrame.BackgroundTransparency = 0.92
+        fovCircleFrame.BackgroundColor3 = Color3.fromRGB(80, 160, 255)
+        fovCircleFrame.BorderSizePixel = 0
+        fovCircleFrame.Visible = SimConfig.Get("ShowFovCircle") or true
+        fovCircleFrame.Parent = screenGui
+        AddCorner(fovCircleFrame, 9999)
+        local fovStroke = AddStroke(fovCircleFrame, Color3.fromRGB(100, 180, 255), 1.5)
+        fovStroke.Transparency = 0.3
+
+        local function UpdateFovCircleRadius(fovAngleDeg: number)
+            local viewportSize = Camera.ViewportSize
+            -- Converte angulo de FOV para raio em pixels na tela
+            local screenHeight = viewportSize.Y
+            local camFovRad = math.rad(Camera.FieldOfView)
+            local targetFovRad = math.rad(fovAngleDeg)
+            local radiusPixels = math.tan(targetFovRad / 2) / math.tan(camFovRad / 2) * (screenHeight / 2) * 2
+
+            fovCircleFrame.Size = UDim2.new(0, math.clamp(radiusPixels, 10, screenHeight * 1.5), 0, math.clamp(radiusPixels, 10, screenHeight * 1.5))
+        end
+        UpdateFovCircleRadius(SimConfig.Get("FOV") or 45)
+
+        SimConfig.Subscribe("FOV", function(newFov)
+            UpdateFovCircleRadius(newFov)
+        end)
+        SimConfig.Subscribe("ShowFovCircle", function(visible)
+            fovCircleFrame.Visible = visible
+        end)
+
+        -- =================================================================
+        -- Painel Principal
+        -- =================================================================
         local mainFrame = Instance.new("Frame")
         mainFrame.Name = "MainFrame"
-        mainFrame.Size = UDim2.new(0, 360, 0, 560)
-        mainFrame.Position = UDim2.new(0, 40, 0.5, -280)
+        mainFrame.Size = UDim2.new(0, 360, 0, 620)
+        mainFrame.Position = UDim2.new(0, 40, 0.5, -310)
         mainFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
         mainFrame.BorderSizePixel = 0
         mainFrame.Active = true
@@ -254,6 +382,7 @@ do
         AddCorner(mainFrame, 10)
         AddStroke(mainFrame, Color3.fromRGB(38, 42, 54), 1.5)
 
+        -- Header com Drag Suave e Tecla de Minimizar
         local header = Instance.new("Frame")
         header.Size = UDim2.new(1, 0, 0, 48)
         header.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
@@ -262,16 +391,38 @@ do
         AddCorner(header, 10)
 
         local titleLabel = Instance.new("TextLabel")
-        titleLabel.Size = UDim2.new(1, -24, 1, 0)
+        titleLabel.Size = UDim2.new(1, -70, 1, 0)
         titleLabel.Position = UDim2.new(0, 16, 0, 0)
         titleLabel.BackgroundTransparency = 1
-        titleLabel.Text = "DEEPHAT KINEMATICS SIMULATOR"
+        titleLabel.Text = "DEEPHAT SIMULATOR v3.0"
         titleLabel.TextColor3 = Color3.fromRGB(240, 243, 248)
         titleLabel.Font = Enum.Font.GothamBold
         titleLabel.TextSize = 12
         titleLabel.TextXAlignment = Enum.TextXAlignment.Left
         titleLabel.Parent = header
 
+        local minimizeHint = Instance.new("TextLabel")
+        minimizeHint.Size = UDim2.new(0, 60, 1, 0)
+        minimizeHint.Position = UDim2.new(1, -68, 0, 0)
+        minimizeHint.BackgroundTransparency = 1
+        minimizeHint.Text = "[RShift]"
+        minimizeHint.TextColor3 = Color3.fromRGB(120, 126, 140)
+        minimizeHint.Font = Enum.Font.GothamMedium
+        minimizeHint.TextSize = 10
+        minimizeHint.TextXAlignment = Enum.TextXAlignment.Right
+        minimizeHint.Parent = header
+
+        -- Suporte a Tecla de Atalho (Toggle GUI)
+        local isGuiVisible = true
+        UserInputService.InputBegan:Connect(function(input, gpe)
+            if gpe then return end
+            if input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then
+                isGuiVisible = not isGuiVisible
+                mainFrame.Visible = isGuiVisible
+            end
+        end)
+
+        -- Drag do Header
         local draggingWindow = false
         local dragStartPos = Vector2.zero
         local startFramePos = UDim2.new()
@@ -309,7 +460,7 @@ do
         contentScroll.BorderSizePixel = 0
         contentScroll.ScrollBarThickness = 3
         contentScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 65, 80)
-        contentScroll.CanvasSize = UDim2.new(0, 0, 0, 680)
+        contentScroll.CanvasSize = UDim2.new(0, 0, 0, 780)
         contentScroll.Parent = mainFrame
 
         local listLayout = Instance.new("UIListLayout")
@@ -317,6 +468,7 @@ do
         listLayout.SortOrder = Enum.SortOrder.LayoutOrder
         listLayout.Parent = contentScroll
 
+        -- 1. Botoes de Perfis
         local profileContainer = Instance.new("Frame")
         profileContainer.Size = UDim2.new(1, 0, 0, 32)
         profileContainer.BackgroundTransparency = 1
@@ -361,6 +513,7 @@ do
         end
         UpdateProfileHighlights(SimConfig.Get("ActiveProfile") or "Normal")
 
+        -- 2. Parametros Numericos (TextBox)
         local paramsContainer = Instance.new("Frame")
         paramsContainer.Size = UDim2.new(1, 0, 0, 170)
         paramsContainer.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
@@ -425,6 +578,7 @@ do
         CreateInput("Mult. Velocidade:", "SpeedMultiplier", 2)
         CreateInput("Tempo de Reacao (s):", "ReactionTime", 2)
 
+        -- 3. Sliders de Intensidade e Precisao
         local slidersContainer = Instance.new("Frame")
         slidersContainer.Size = UDim2.new(1, 0, 0, 115)
         slidersContainer.BackgroundColor3 = Color3.fromRGB(24, 27, 36)
@@ -444,7 +598,6 @@ do
         sPad.Parent = slidersContainer
 
         local currentlyActiveSlider = nil
-
         local function CreateSlider(title: string, configKey: string, minVal: number, maxVal: number)
             local container = Instance.new("Frame")
             container.Size = UDim2.new(1, 0, 0, 40)
@@ -534,8 +687,9 @@ do
         CreateSlider("Intensidade:", "Intensity", 0.1, 2.0)
         CreateSlider("Precisao:", "TrackingPrecision", 0.50, 1.00)
 
+        -- 4. Botoes de Acao e Exportacao
         local actionsContainer = Instance.new("Frame")
-        actionsContainer.Size = UDim2.new(1, 0, 0, 85)
+        actionsContainer.Size = UDim2.new(1, 0, 0, 125)
         actionsContainer.BackgroundTransparency = 1
         actionsContainer.LayoutOrder = 4
         actionsContainer.Parent = contentScroll
@@ -557,7 +711,10 @@ do
 
         local startBtn = CreateBtn("INICIAR TESTE", Color3.fromRGB(36, 150, 75), UDim2.new(0, 0, 0, 0), UDim2.new(0.48, 0, 0, 36))
         local stopBtn = CreateBtn("PARAR TESTE", Color3.fromRGB(195, 48, 48), UDim2.new(0.52, 0, 0, 0), UDim2.new(0.48, 0, 0, 36))
-        local resetBtn = CreateBtn("RESETAR PADROES", Color3.fromRGB(45, 50, 64), UDim2.new(0, 0, 0, 42), UDim2.new(1, 0, 0, 34))
+        local resetBtn = CreateBtn("RESETAR PADROES", Color3.fromRGB(45, 50, 64), UDim2.new(0, 0, 0, 42), UDim2.new(0.48, 0, 0, 34))
+        local exportBtn = CreateBtn("EXPORTAR LOG", Color3.fromRGB(65, 80, 110), UDim2.new(0.52, 0, 0, 42), UDim2.new(0.48, 0, 0, 34))
+        local fovToggleBtn = CreateBtn("ALTERNAR CIRCULO FOV", Color3.fromRGB(30, 34, 46), UDim2.new(0, 0, 0, 82), UDim2.new(1, 0, 0, 34))
+        AddStroke(fovToggleBtn, Color3.fromRGB(50, 56, 75), 1)
 
         startBtn.MouseButton1Click:Connect(function()
             if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
@@ -569,9 +726,17 @@ do
             SimConfig.LoadProfile("Normal")
             if DashboardGUI.OnResetRequested then DashboardGUI.OnResetRequested() end
         end)
+        exportBtn.MouseButton1Click:Connect(function()
+            if DashboardGUI.OnExportRequested then DashboardGUI.OnExportRequested() end
+        end)
+        fovToggleBtn.MouseButton1Click:Connect(function()
+            local cur = SimConfig.Get("ShowFovCircle") or true
+            SimConfig.Set("ShowFovCircle", not cur)
+        end)
 
+        -- 5. Card de Telemetria com Barra de Anomalia / Suspeicao
         local telemetryCard = Instance.new("Frame")
-        telemetryCard.Size = UDim2.new(1, 0, 0, 90)
+        telemetryCard.Size = UDim2.new(1, 0, 0, 140)
         telemetryCard.BackgroundColor3 = Color3.fromRGB(22, 25, 34)
         telemetryCard.LayoutOrder = 5
         telemetryCard.Parent = contentScroll
@@ -585,11 +750,12 @@ do
         local tPad = Instance.new("UIPadding")
         tPad.PaddingTop = UDim.new(0, 8)
         tPad.PaddingLeft = UDim.new(0, 10)
+        tPad.PaddingRight = UDim.new(0, 10)
         tPad.Parent = telemetryCard
 
         local function CreateRow(txt: string)
             local lbl = Instance.new("TextLabel")
-            lbl.Size = UDim2.new(1, -20, 0, 15)
+            lbl.Size = UDim2.new(1, 0, 0, 15)
             lbl.BackgroundTransparency = 1
             lbl.Text = txt
             lbl.TextColor3 = Color3.fromRGB(170, 176, 192)
@@ -604,6 +770,22 @@ do
         local statusVel = CreateRow("Velocidade Angular: 0.0 deg/s")
         local statusObs = CreateRow("Linha de Visao: LIVRE")
         local statusMode = CreateRow("Modo Cinematico: IDLE")
+
+        -- Barra de Suspeicao / Anomalia
+        local barTitle = CreateRow("Indice de Anomalia (Anti-Cheat Score): 0%")
+        local barTrack = Instance.new("Frame")
+        barTrack.Size = UDim2.new(1, 0, 0, 8)
+        barTrack.BackgroundColor3 = Color3.fromRGB(14, 16, 22)
+        barTrack.BorderSizePixel = 0
+        barTrack.Parent = telemetryCard
+        AddCorner(barTrack, 4)
+
+        local barFill = Instance.new("Frame")
+        barFill.Size = UDim2.new(0, 0, 1, 0)
+        barFill.BackgroundColor3 = Color3.fromRGB(52, 199, 89)
+        barFill.BorderSizePixel = 0
+        barFill.Parent = barTrack
+        AddCorner(barFill, 4)
 
         SimConfig.SubscribeAll(function(key, val)
             if key == "ActiveProfile" then
@@ -620,6 +802,18 @@ do
             statusObs.Text = string.format("Linha de Visao: %s", data.isObstructed and "OBSTRUIDO" or "LIVRE")
             statusObs.TextColor3 = data.isObstructed and Color3.fromRGB(240, 80, 80) or Color3.fromRGB(80, 220, 120)
             statusMode.Text = string.format("Modo Cinematico: %s", data.mode or "IDLE")
+
+            local score = data.suspicionScore or 0
+            barTitle.Text = string.format("Indice de Anomalia (Anti-Cheat Score): %d%%", score)
+            barFill.Size = UDim2.new(math.clamp(score / 100, 0, 1), 0, 1, 0)
+
+            if score < 35 then
+                barFill.BackgroundColor3 = Color3.fromRGB(52, 199, 89) -- Verde (Humano)
+            elseif score < 70 then
+                barFill.BackgroundColor3 = Color3.fromRGB(255, 179, 64) -- Laranja (Alerta)
+            else
+                barFill.BackgroundColor3 = Color3.fromRGB(255, 69, 58) -- Vermelho (Robótico / Flag)
+            end
         end
 
         return screenGui
@@ -627,7 +821,7 @@ do
 end
 
 -- =========================================================================
--- [ORQUESTRADOR] EXECUCAO OTIMIZADA
+-- [4/4] ORQUESTRADOR: EXECUCAO OTIMIZADA E INTEGRADA
 -- =========================================================================
 local guiInstance = DashboardGUI.Create()
 
@@ -653,15 +847,15 @@ local function GetTarget(): Vector3
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
     local myPos = myRoot and myRoot.Position or Camera.CFrame.Position
 
-    local closestPlayerDist = math.huge
+    local closestDist = math.huge
     local targetPos: Vector3? = nil
 
     for _, other in ipairs(Players:GetPlayers()) do
         if other ~= LocalPlayer and other.Character and other.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = other.Character.HumanoidRootPart :: BasePart
             local d = (hrp.Position - myPos).Magnitude
-            if d < closestPlayerDist then
-                closestPlayerDist = d
+            if d < closestDist then
+                closestDist = d
                 targetPos = hrp.Position
             end
         end
@@ -671,6 +865,7 @@ local function GetTarget(): Vector3
         return targetPos
     end
 
+    -- Alvo orbital estavel em torno do personagem (para testes sozinhos)
     local t = os.clock() * 0.9
     local center = myPos + Vector3.new(0, 3, 0)
     return center + Vector3.new(math.sin(t) * 16, math.sin(t * 0.7) * 2, math.cos(t) * 16)
@@ -679,7 +874,7 @@ end
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat] Simulador INICIADO!")
+    print("[DeepHat v3.0] Simulador INICIADO!")
 
     conn = RunService.RenderStepped:Connect(function(dt)
         local target = GetTarget()
@@ -711,12 +906,16 @@ DashboardGUI.OnStopRequested = function()
         conn:Disconnect()
         conn = nil
     end
-    print("[DeepHat] Simulador PARADO!")
-    DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO" })
+    print("[DeepHat v3.0] Simulador PARADO!")
+    DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO", suspicionScore = 0 })
 end
 
 DashboardGUI.OnResetRequested = function()
-    print("[DeepHat] Parametros resetados para Normal!")
+    print("[DeepHat v3.0] Parametros resetados para Normal!")
+end
+
+DashboardGUI.OnExportRequested = function()
+    Kinematics:ExportReport()
 end
 
 _G.DeepHat_Cleanup = function()
@@ -729,4 +928,4 @@ _G.DeepHat_Cleanup = function()
     end
 end
 
-print("[DeepHat] Sistema v2.0 OTIMIZADO carregado com sucesso!")
+print("[DeepHat v3.0] Suite Profissional carregada! Pressione [RightShift] para minimizar/restaurar.")
