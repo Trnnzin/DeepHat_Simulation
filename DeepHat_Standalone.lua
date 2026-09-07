@@ -314,63 +314,76 @@ end
 -- =========================================================================
 local ESPVisualizer = {}
 do
-    local activeHighlights: { [Model]: Highlight } = {}
+    -- Tabela com chaves fracas: objetos sao limpos automaticamente pelo GC do Roblox
+    local activeHighlights = setmetatable({}, { __mode = "k" })
 
-    local function GetOrCreateHighlight(character: Model): Highlight?
-        if not character then return nil end
+    local function GetOrCreateHighlight(character: Model?): Highlight?
+        if not character or not character.Parent then return nil end
         local hl = activeHighlights[character]
         if not hl or not hl.Parent then
-            hl = Instance.new("Highlight")
-            hl.Name = "DeepHat_ESP_Highlight"
-            hl.Adornee = character
-            hl.FillTransparency = 0.45
-            hl.OutlineTransparency = 0.1
-            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            pcall(function() hl.Parent = character end)
-            activeHighlights[character] = hl
+            local ok, newHl = pcall(function()
+                local inst = Instance.new("Highlight")
+                inst.Name = "DeepHat_ESP_Highlight"
+                inst.Adornee = character
+                inst.FillTransparency = 0.45
+                inst.OutlineTransparency = 0.1
+                inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                inst.Parent = character
+                return inst
+            end)
+            if ok and newHl then
+                hl = newHl
+                activeHighlights[character] = hl
+            end
         end
         return hl
     end
 
-    function ESPVisualizer.UpdateTarget(character: Model, isObstructed: boolean, isMainTarget: boolean)
-        if not SimConfig.Get("EnableESP") then
+    function ESPVisualizer.UpdateTarget(character: Model?, isObstructed: boolean, isMainTarget: boolean)
+        if not character or not SimConfig.Get("EnableESP") then
             ESPVisualizer.Clear(character)
             return
         end
 
         local hl = GetOrCreateHighlight(character)
-        if isMainTarget then
-            -- Alvo focado na mira: Verde Brilhante (Visivel) ou Vermelho Vivo (Parede)
-            if isObstructed then
-                hl.FillColor = Color3.fromRGB(255, 45, 45)
-                hl.OutlineColor = Color3.fromRGB(255, 180, 180)
+        if not hl then return end
+
+        pcall(function()
+            if isMainTarget then
+                if isObstructed then
+                    hl.FillColor = Color3.fromRGB(255, 45, 45)
+                    hl.OutlineColor = Color3.fromRGB(255, 180, 180)
+                else
+                    hl.FillColor = Color3.fromRGB(46, 230, 110)
+                    hl.OutlineColor = Color3.fromRGB(200, 255, 200)
+                end
+                hl.FillTransparency = 0.35
+                hl.OutlineTransparency = 0.05
             else
-                hl.FillColor = Color3.fromRGB(46, 230, 110)
-                hl.OutlineColor = Color3.fromRGB(200, 255, 200)
+                hl.FillColor = isObstructed and Color3.fromRGB(180, 70, 70) or Color3.fromRGB(50, 140, 230)
+                hl.OutlineColor = Color3.fromRGB(240, 240, 240)
+                hl.FillTransparency = 0.65
+                hl.OutlineTransparency = 0.25
             end
-            hl.FillTransparency = 0.35
-            hl.OutlineTransparency = 0.05
-        else
-            -- Outros alvos: Azul/Ciano (Visivel) ou Laranja/Vermelho escuro (Parede)
-            hl.FillColor = isObstructed and Color3.fromRGB(180, 70, 70) or Color3.fromRGB(50, 140, 230)
-            hl.OutlineColor = Color3.fromRGB(240, 240, 240)
-            hl.FillTransparency = 0.65
-            hl.OutlineTransparency = 0.25
-        end
+        end)
     end
 
     function ESPVisualizer.Clear(character: Model?)
         if not character then return end
-        local hl = activeHighlights[character]
-        if hl then
-            pcall(function() hl:Destroy() end)
+        pcall(function()
+            local hl = activeHighlights[character]
+            if hl then
+                pcall(function() hl:Destroy() end)
+            end
             activeHighlights[character] = nil
-        end
+        end)
     end
 
     function ESPVisualizer.ClearAll()
         for char, hl in pairs(activeHighlights) do
-            if hl then pcall(function() hl:Destroy() end) end
+            pcall(function()
+                if hl then hl:Destroy() end
+            end)
         end
         table.clear(activeHighlights)
     end
@@ -1391,7 +1404,7 @@ local lastSnapTime = 0
 local lastUiUpdate = 0
 
 -- Rastreio de velocidade anterior dos alvos para calculo do vetor aceleração
-local targetLastPosCache: { [Model]: { pos: Vector3, time: number } } = {}
+local targetLastPosCache = setmetatable({}, { __mode = "k" })
 
 -- Obtem a parte do corpo desejada com suporte universal para R15, R6 e Dummies
 local function GetBonePart(char: Model, boneSetting: string): BasePart?
@@ -1518,7 +1531,7 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean)
                     vel = (currentPos - last.pos) / dt
                 end
             end
-            targetLastPosCache[char] = { pos = currentPos, time = now }
+            if char then targetLastPosCache[char] = { pos = currentPos, time = now } end
 
             -- Checagem de obstrucao de visao (WallCheck)
             local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
@@ -1643,10 +1656,12 @@ _G.DeepHat_Cleanup = function()
 end
 
 Players.PlayerRemoving:Connect(function(plr)
-    if plr and plr.Character then
-        ESPVisualizer.Clear(plr.Character)
-        targetLastPosCache[plr.Character] = nil
-    end
+    pcall(function()
+        if plr and plr.Character then
+            ESPVisualizer.Clear(plr.Character)
+            pcall(function() targetLastPosCache[plr.Character] = nil end)
+        end
+    end)
 end)
 
 SimConfig.Subscribe("EnableESP", function(enabled)
