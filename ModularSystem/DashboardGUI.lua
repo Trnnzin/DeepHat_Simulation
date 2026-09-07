@@ -529,7 +529,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Canvas do Manequim / Dummy
     local dummyCanvas = Instance.new("Frame")
-    dummyCanvas.Size = UDim2.new(1, -20, 0.52, 0)
+    dummyCanvas.Size = UDim2.new(1, -20, 0.48, 0)
     dummyCanvas.Position = UDim2.new(0, 10, 0, 32)
     dummyCanvas.BackgroundColor3 = THEME.BG_INPUT
     dummyCanvas.Parent = col3
@@ -566,8 +566,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     legLineR.Parent = dummyCanvas
 
     local activeRegionBadge = Instance.new("TextLabel")
-    activeRegionBadge.Size = UDim2.new(1, -20, 0, 24)
-    activeRegionBadge.Position = UDim2.new(0, 10, 0.52, 38)
+    activeRegionBadge.Size = UDim2.new(1, -20, 0, 22)
+    activeRegionBadge.Position = UDim2.new(0, 10, 0.48, 38)
     activeRegionBadge.BackgroundColor3 = THEME.BG_INPUT
     activeRegionBadge.Font = Enum.Font.GothamBold
     activeRegionBadge.TextSize = 10
@@ -615,24 +615,24 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     -- Mini Painel de Telemetria Integrado na Coluna 3
     local telemetryCard = Instance.new("Frame")
-    telemetryCard.Size = UDim2.new(1, -20, 0, 78)
-    telemetryCard.Position = UDim2.new(0, 10, 1, -84)
+    telemetryCard.Size = UDim2.new(1, -20, 0, 92)
+    telemetryCard.Position = UDim2.new(0, 10, 1, -98)
     telemetryCard.BackgroundColor3 = THEME.BG_INPUT
     telemetryCard.Parent = col3
     AddCorner(telemetryCard, 4)
     AddStroke(telemetryCard, THEME.BORDER, 1)
 
     local teleLayout = Instance.new("UIListLayout")
-    teleLayout.Padding = UDim.new(0, 3)
+    teleLayout.Padding = UDim.new(0, 2)
     teleLayout.Parent = telemetryCard
 
     local telePad = Instance.new("UIPadding")
-    telePad.PaddingTop = UDim.new(0, 6); telePad.PaddingLeft = UDim.new(0, 8); telePad.PaddingRight = UDim.new(0, 8)
+    telePad.PaddingTop = UDim.new(0, 5); telePad.PaddingLeft = UDim.new(0, 8); telePad.PaddingRight = UDim.new(0, 8)
     telePad.Parent = telemetryCard
 
     local function CreateTeleLine(titleText: string): TextLabel
         local line = Instance.new("TextLabel")
-        line.Size = UDim2.new(1, 0, 0, 14)
+        line.Size = UDim2.new(1, 0, 0, 15)
         line.BackgroundTransparency = 1
         line.Font = Enum.Font.GothamMedium
         line.TextSize = 9
@@ -646,6 +646,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local teleVel = CreateTeleLine("VELOCIDADE ANGULAR: 0.0 °/s")
     local teleObs = CreateTeleLine("LINHA DE VISÃO: LIVRE")
     local teleMode = CreateTeleLine("MODO: PARADO")
+    local teleTarget = CreateTeleLine("ALVO ATIVO: NENHUM")
     local teleFps = CreateTeleLine("STATUS DO ENGINE: 60 FPS")
 
     -- =========================================================================
@@ -758,6 +759,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         teleObs.Text = string.format("LINHA DE VISÃO: %s", data.isObstructed and "OBSTRUÍDO (PAREDE)" or "LIVRE")
         teleObs.TextColor3 = data.isObstructed and Color3.fromRGB(240, 80, 80) or THEME.SUCCESS
         teleMode.Text = string.format("MODO: %s", tostring(data.mode or "IDLE"))
+        teleTarget.Text = string.format("ALVO ATIVO: %s", tostring(data.targetName or "NENHUM"))
+        teleTarget.TextColor3 = data.targetName and THEME.SUCCESS or THEME.TEXT_MUTED
         local dt = tonumber(data.dt) or 0.016
         local fps = math.floor(1 / math.max(dt, 0.001))
         teleFps.Text = string.format("STATUS DO ENGINE: %d FPS", fps)
