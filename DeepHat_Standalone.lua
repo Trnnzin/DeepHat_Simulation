@@ -1759,49 +1759,55 @@ DashboardGUI.OnStartRequested = function()
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
 
     RunService:BindToRenderStep(BIND_PIPELINE, Enum.RenderPriority.Camera.Value + 1, function(dt)
-        local targetPos, targetVel, targetModel, obstructed, partLabel = GetTargetData()
-        local now = os.clock()
+        -- Pipeline de Execução Segura: pcall isola cálculo matemático da câmera e UI
+        local ok, _ = pcall(function()
+            local targetPos, targetVel, targetModel, obstructed, partLabel = GetTargetData()
+            local now = os.clock()
 
-        DashboardGUI:UpdateFovCircle()
+            DashboardGUI:UpdateFovCircle()
 
-        local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        local holdToAim = SimConfig.Get("HoldToAim") == true
-        local shouldAim = isRunning and (not holdToAim or isRmbHeld)
+            local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            local holdToAim = SimConfig.Get("HoldToAim") == true
+            local shouldAim = isRunning and (not holdToAim or isRmbHeld)
 
-        if targetPos and shouldAim then
-            local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
-            local responseTimeSec = (SimConfig.Get("ResponseTime") or 16) / 1000.0
+            if targetPos and shouldAim then
+                local snapFreq = SimConfig.Get("SnapFrequency") or 0.03
+                local responseTimeSec = (SimConfig.Get("ResponseTime") or 16) / 1000.0
 
-            local telem
-            if math.random() < snapFreq and (now - lastSnapTime > responseTimeSec) then
-                lastSnapTime = now
-                telem = Kinematics:StepSnap(targetPos, targetVel, dt)
+                local telem
+                if math.random() < snapFreq and (now - lastSnapTime > responseTimeSec) then
+                    lastSnapTime = now
+                    telem = Kinematics:StepSnap(targetPos, targetVel, dt)
+                else
+                    telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
+                end
+
+                if telem and telem.cframe then
+                    Camera.CFrame = telem.cframe
+                end
+
+                if (now - lastUiUpdate) >= 0.066 then
+                    lastUiUpdate = now
+                    telem.dt = dt
+                    telem.targetName = targetModel and targetModel.Name or "DETECTADO"
+                    DashboardGUI:UpdateTelemetryDisplay(telem)
+                end
             else
-                telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
+                if (now - lastUiUpdate) >= 0.15 then
+                    lastUiUpdate = now
+                    DashboardGUI:UpdateTelemetryDisplay({
+                        angularVelocity = 0,
+                        isObstructed = false,
+                        mode = isRunning and "LIVRE (BUSCANDO)" or "PARADO",
+                        targetName = nil,
+                        suspicionScore = 0,
+                        dt = dt
+                    })
+                end
             end
-
-            if telem and telem.cframe then
-                Camera.CFrame = telem.cframe
-            end
-
-            if (now - lastUiUpdate) >= 0.066 then
-                lastUiUpdate = now
-                telem.dt = dt
-                telem.targetName = targetModel and targetModel.Name or "DETECTADO"
-                DashboardGUI:UpdateTelemetryDisplay(telem)
-            end
-        else
-            if (now - lastUiUpdate) >= 0.15 then
-                lastUiUpdate = now
-                DashboardGUI:UpdateTelemetryDisplay({
-                    angularVelocity = 0,
-                    isObstructed = false,
-                    mode = isRunning and "LIVRE (BUSCANDO)" or "PARADO",
-                    targetName = nil,
-                    suspicionScore = 0,
-                    dt = dt
-                })
-            end
+        end)
+        if not ok then
+            -- Aborta o frame silenciosamente em caso de anomalia de instância ou destruição física
         end
     end)
 end
