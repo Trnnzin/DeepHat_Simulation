@@ -1,49 +1,48 @@
 --!strict
--- DeepHat_Standalone.lua (v4.0 - Advanced Kinematics & ESP Suite)
--- Motor de Simulacao de Cinematica 3D, Deteccao de Anomalias, Previsao Balistica e Chams ESP
--- Recursos:
--- 1. Previsao Balistica de Movimento (Lead Prediction via delta vetorial)
--- 2. Seletor de Osso Alvo Dinamico (Head, UpperTorso, Closest Bone)
--- 3. ESP Chams com Cores Dinamicas (Verde = Visivel / Vermelho = Ocluido atras de parede)
--- 4. Circulo de FOV Dinamico na Tela (Redimensionamento em tempo real)
--- 5. Termometro de Anomalia / Suspeicao em Tempo Real (Anti-Cheat Score 0% a 100%)
--- 6. Tecla de Atalho (RightShift / Insert) para Minimizar / Restaurar a Interface
--- 7. Exportador de Relatorio Estatistico de Telemetria no Console
--- 8. Throttling de UI a 10Hz e Zero-Allocation de Memoria (Zero Lag)
+-- DeepHat_Standalone.lua (v5.0 - Kernel-Level Tracking & Visual Suite)
+-- Motor de Simulação de Cinética 3D, Detecção de Instâncias, Álgebra Linear e Chams ESP
+-- Arquitetura Anti-Lag & Anti-Fail:
+-- 1. Detecção Universal de Instâncias: Type Guarding para BasePart e Model (:GetPivot())
+-- 2. Motor Vetorial com Guarda Epsilon (1e-4) e Interpolação Lerp Frame-Rate Independent
+-- 3. Destruição e Reconstrução Estrita de UI com Design Minimalista em 3 Colunas
+-- 4. Overlay Visual com DepthMode AlwaysOnTop e Isolamento de Renderização
 
--- Limpeza estrita de qualquer sessao anterior ou interface fantasma
+-- Destruição Total de Sessões Anteriores ou UIs Legadas
 local function PurgeAllLegacyUIs()
-    local containers = {}
-    pcall(function() table.insert(containers, game:GetService("CoreGui")) end)
+    local containers: { Instance } = {}
+    local okHui, hui = pcall(function() return (gethui and gethui()) end)
+    if okHui and hui then table.insert(containers, hui) end
+
+    local okCore, core = pcall(function() return game:GetService("CoreGui") end)
+    if okCore and core then table.insert(containers, core) end
+
     local pGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pGui then table.insert(containers, pGui) end
 
-    local targetNames = {
-        "DiagnosticSimulationDashboard",
-        "KinematicsSimulationDashboard",
-        "DeepHat_GUI",
-        "FovCircleOverlay",
-        "DeepHat_ESP_Highlight",
-        "DeepHat_ESP_Container"
+    local targetPatterns = {
+        "Diagnostic", "Kinematics", "DeepHat", "FovCircle", "HL_"
     }
 
+    for _, container in ipairs(containers) do
+        pcall(function()
+            for _, child in ipairs(container:GetChildren()) do
+                for _, pat in ipairs(targetPatterns) do
+                    if child.Name:find(pat) then
+                        pcall(function() child:Destroy() end)
+                        break
+                    end
+                end
+            end
+        end)
+    end
+
     pcall(function()
-        for _, obj in ipairs(Workspace:GetDescendants()) do
+        for _, obj in ipairs(game:GetService("Workspace"):GetDescendants()) do
             if obj:IsA("Highlight") and (obj.Name:find("DeepHat") or obj.Name:find("HL_")) then
-                obj:Destroy()
+                pcall(function() obj:Destroy() end)
             end
         end
     end)
-
-    for _, container in ipairs(containers) do
-        for _, name in ipairs(targetNames) do
-            local found = container:FindFirstChild(name)
-            while found do
-                pcall(function() found:Destroy() end)
-                found = container:FindFirstChild(name)
-            end
-        end
-    end
 end
 PurgeAllLegacyUIs()
 
@@ -51,17 +50,14 @@ if _G.DeepHat_Cleanup then
     pcall(_G.DeepHat_Cleanup)
 end
 
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local CoreGuiService = game:GetService("CoreGui")
-
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
--- =========================================================================
 -- [1/5] MODULO: SimConfig (Central de Parametros + Observer Pattern)
 -- =========================================================================
 local SimConfig = {}
@@ -320,66 +316,78 @@ end
 
 -- =========================================================================
 -- =========================================================================
--- [2/5] MODULO: InstanceDetector (Scanner Espacial em Ambientes Complexos)
+-- =========================================================================
+-- [2/5] MODULO: InstanceDetector (Scanner de Instâncias de Alta Precisão)
 -- =========================================================================
 local InstanceDetector = {}
 InstanceDetector.__index = InstanceDetector
 
-export type POIResult = {
-    Position: Vector3,
-    Model: Model,
-    Part: BasePart?,
-    Label: string
-}
-
 function InstanceDetector.new(scanInterval: number?)
     local self = setmetatable({}, InstanceDetector)
-    self.ScanInterval = scanInterval or 0.20 -- 5Hz de varredura topológica (Debounce de Performance)
+    self.ScanInterval = scanInterval or 0.15
     self.LastScanTime = 0
-    self.CandidatePool = {} :: { Model }
+    self.CandidatePool = {} :: { Instance }
     self.LocalPlayer = Players.LocalPlayer
-    self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character" }
+    self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
     self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
     return self
 end
 
-function InstanceDetector:IsValidTarget(model: Instance, teamCheck: boolean?): (boolean, Humanoid?)
-    if not model or not model:IsA("Model") or not model:IsDescendantOf(game) then
-        return false, nil
+-- Validação de Integridade (Type Guarding Estrito)
+function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): boolean
+    -- Type Guarding: BasePart ou Model válido no DataModel
+    if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(game) then
+        return false
     end
 
     local myChar = self.LocalPlayer and self.LocalPlayer.Character
-    if myChar and (model == myChar or model:IsDescendantOf(myChar)) then
-        return false, nil
+    if myChar and (objeto == myChar or objeto:IsDescendantOf(myChar)) then
+        return false
     end
 
-    -- Alvo Válido OBRIGATORIAMENTE possui Humanoid ativo (evita destacar o Mapa, Prédios ou Chão)
-    local hum = model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildWhichIsA("Humanoid", true)
-    if not hum or hum.Health <= 0 then
-        return false, nil
+    -- Ignora geometrias de mapa e terreno
+    if objeto:IsA("Terrain") or objeto.Name == "Terrain" or objeto.Name == "Baseplate" then
+        return false
+    end
+    local lowerName = objeto.Name:lower()
+    if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" then
+        return false
     end
 
+    -- Se possuir Humanoid, verifica se ainda está vivo
+    local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
+    if hum and hum.Health <= 0 then
+        return false
+    end
+
+    -- Filtro de equipe
     if teamCheck and self.LocalPlayer and self.LocalPlayer.Team then
-        local otherPlayer = Players:GetPlayerFromCharacter(model)
+        local otherPlayer = Players:GetPlayerFromCharacter(objeto)
         if otherPlayer and otherPlayer.Team == self.LocalPlayer.Team then
-            return false, hum
+            return false
         end
     end
 
-    return true, hum
+    return true
 end
 
--- Resolução Afim: :GetPivot().Position como fallback universal para modelos dinâmicos sem PrimaryPart
-function InstanceDetector:ResolvePivotPosition(model: Model, preferredBone: string?): (Vector3?, BasePart?, string)
-    if not model or not model:IsDescendantOf(game) then
+-- Resolução Afim de Posição via :GetPivot().Position ou BasePart.Position
+function InstanceDetector:ResolvePivotPosition(objeto: Instance, preferredBone: string?): (Vector3?, BasePart?, string)
+    if not self:IsValidTarget(objeto) then
         return nil, nil, "None"
     end
 
+    -- Caso 1: Objeto primitivo BasePart
+    if objeto:IsA("BasePart") then
+        return objeto.Position, objeto, objeto.Name
+    end
+
+    -- Caso 2: Objeto Model com hierarquia interna
+    local model = objeto :: Model
     local bone = string.lower(preferredBone or SimConfig.Get("TargetRegion") or "head")
     local targetPart: BasePart? = nil
     local label = "Pivot"
 
-    -- 1. Resolução hierárquica por ossos do modelo
     if bone == "head" then
         targetPart = model:FindFirstChild("Head", true) :: BasePart?
             or model:FindFirstChild("head", true) :: BasePart?
@@ -403,12 +411,11 @@ function InstanceDetector:ResolvePivotPosition(model: Model, preferredBone: stri
         label = "Legs"
     end
 
-    -- 2. Fallbacks de partes estruturais
     if not targetPart then
-        targetPart = model:FindFirstChild("HumanoidRootPart", true) :: BasePart?
+        targetPart = model.PrimaryPart
+            or model:FindFirstChild("HumanoidRootPart", true) :: BasePart?
             or model:FindFirstChild("Head", true) :: BasePart?
             or model:FindFirstChild("Torso", true) :: BasePart?
-            or model.PrimaryPart
             or model:FindFirstChildWhichIsA("BasePart", true)
         if targetPart then
             label = targetPart.Name
@@ -419,7 +426,7 @@ function InstanceDetector:ResolvePivotPosition(model: Model, preferredBone: stri
         return targetPart.Position, targetPart, label
     end
 
-    -- 3. Resolução Universal Invariante via CFrame Pivot da Engine
+    -- Fallback Invariante de Centro de Massa: :GetPivot().Position
     local ok, pivot = pcall(function() return model:GetPivot() end)
     if ok and pivot then
         return pivot.Position, nil, "Pivot"
@@ -428,49 +435,47 @@ function InstanceDetector:ResolvePivotPosition(model: Model, preferredBone: stri
     return nil, nil, "None"
 end
 
--- Varredura Espacial com Debounce para ambientes com alta densidade de instâncias
-function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boolean?): { Model }
+-- Varredura Espacial Desacoplada
+function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boolean?): { Instance }
     local now = os.clock()
     if not forceRescan and (now - self.LastScanTime < self.ScanInterval) and #self.CandidatePool > 0 then
-        local verifiedPool: { Model } = {}
-        for _, candidate in ipairs(self.CandidatePool) do
-            local valid = self:IsValidTarget(candidate, teamCheck)
-            if valid then
-                table.insert(verifiedPool, candidate)
+        local verified: { Instance } = {}
+        for _, cand in ipairs(self.CandidatePool) do
+            if self:IsValidTarget(cand, teamCheck) then
+                table.insert(verified, cand)
             end
         end
-        self.CandidatePool = verifiedPool
+        self.CandidatePool = verified
         return self.CandidatePool
     end
 
     self.LastScanTime = now
-    local newPool: { Model } = {}
-    local seen: { [Model]: boolean } = {}
+    local newPool: { Instance } = {}
+    local seen: { [Instance]: boolean } = {}
 
-    local function IngestCandidate(inst: Instance)
-        local valid = self:IsValidTarget(inst, teamCheck)
-        if valid and not seen[inst :: Model] then
-            seen[inst :: Model] = true
-            table.insert(newPool, inst :: Model)
+    local function Ingest(inst: Instance)
+        if self:IsValidTarget(inst, teamCheck) and not seen[inst] then
+            seen[inst] = true
+            table.insert(newPool, inst)
         end
     end
 
-    -- 1. Jogadores conectados
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= self.LocalPlayer and player.Character then
-            IngestCandidate(player.Character)
+    -- 1. Jogadores
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= self.LocalPlayer and p.Character then
+            Ingest(p.Character)
         end
     end
 
-    -- 2. Pastas organizacionais no Workspace
+    -- 2. Pastas organizacionais
     for _, folderName in ipairs(self.SearchFolders) do
         local container = Workspace:FindFirstChild(folderName)
         if container then
             for _, child in ipairs(container:GetChildren()) do
-                if child:IsA("Model") then IngestCandidate(child) end
+                if child:IsA("Model") or child:IsA("BasePart") then Ingest(child) end
             end
             for _, desc in ipairs(container:GetDescendants()) do
-                if desc:IsA("Model") then IngestCandidate(desc) end
+                if desc:IsA("Model") or desc:IsA("BasePart") then Ingest(desc) end
             end
         end
     end
@@ -480,14 +485,25 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
     if okCs and CollectionService then
         for _, tag in ipairs(self.KnownTags) do
             for _, tagged in ipairs(CollectionService:GetTagged(tag)) do
-                if tagged:IsA("Model") then IngestCandidate(tagged) end
+                if tagged:IsA("Model") or tagged:IsA("BasePart") then Ingest(tagged) end
             end
         end
     end
 
     -- 4. Filhos da raiz do Workspace
     for _, child in ipairs(Workspace:GetChildren()) do
-        if child:IsA("Model") then IngestCandidate(child) end
+        if child:IsA("Model") then
+            local hasHum = child:FindFirstChildOfClass("Humanoid")
+            local name = child.Name:lower()
+            if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") then
+                Ingest(child)
+            end
+        elseif child:IsA("BasePart") then
+            local name = child.Name:lower()
+            if name:find("target") or name:find("dummy") or name:find("hitbox") then
+                Ingest(child)
+            end
+        end
     end
 
     self.CandidatePool = newPool
@@ -495,7 +511,7 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
 end
 
 -- =========================================================================
--- [3/5] MODULO: VectorTracker (Rastreamento Vetorial, Epsilon Guard & Lerp)
+-- [3/5] MODULO: VectorTracker (Motor de Rotação e Interpolação Vetorial)
 -- =========================================================================
 local VectorTracker = {}
 VectorTracker.__index = VectorTracker
@@ -508,7 +524,7 @@ function VectorTracker.new(initialCFrame: CFrame?, filterInstances: { Instance }
     self.PreviousLookVector = self.CurrentCFrame.LookVector
     self.PreviousAngularVelocity = 0
     self.NoiseSeed = math.random(1000, 9999)
-    self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Model]: { pos: Vector3, time: number, vel: Vector3 } }
+    self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Instance]: { pos: Vector3, time: number, vel: Vector3 } }
 
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -550,9 +566,9 @@ function VectorTracker:CheckObstruction(fromPos: Vector3, toPos: Vector3): boole
     return (Workspace:Raycast(fromPos, (dir / dist) * dist, self.RayParams) ~= nil)
 end
 
-function VectorTracker:EstimateVelocity(model: Model, currentPos: Vector3): Vector3
+function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
     local now = os.clock()
-    local cached = self.VelocityCache[model]
+    local cached = self.VelocityCache[inst]
     local vel = Vector3.zero
     if cached then
         local dt = (now - cached.time)
@@ -562,7 +578,7 @@ function VectorTracker:EstimateVelocity(model: Model, currentPos: Vector3): Vect
             vel = cached.vel
         end
     end
-    self.VelocityCache[model] = { pos = currentPos, time = now, vel = vel }
+    self.VelocityCache[inst] = { pos = currentPos, time = now, vel = vel }
     return vel
 end
 
@@ -597,7 +613,7 @@ function VectorTracker:StepSnap(rawTargetPosition: Vector3, targetVelocity: Vect
     local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
     local angularErrorDeg = math.deg(math.acos(dot))
 
-    self.CurrentCFrame = CFrame.lookAt(eyePos, targetPosition)
+    self.CurrentCFrame = CFrame.lookAt(eyePos, targetPosition, Vector3.yAxis)
     local safeDt = (dt and dt > 0) and dt or 0.0166
     local angVel = angularErrorDeg / safeDt
     local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
@@ -632,7 +648,7 @@ function VectorTracker:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Ve
     local toTarget = (targetPosition - eyePos)
     local dist = toTarget.Magnitude
 
-    -- GUARDA EPSILON: Previne divisão por zero e vetores NaN
+    -- PREVENÇÃO DE NaN: Guarda Epsilon estrita
     if dist < EPSILON then return self.CachedTelemetry end
 
     local dirToTarget = toTarget / dist
@@ -644,7 +660,7 @@ function VectorTracker:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Ve
     local speedMult = math.clamp((SimConfig.Get("MoveSpeed") or 16.0) / 16.0, 0.25, 3.0)
     local precision = math.clamp((SimConfig.Get("TrackingPrecision") or 98.5) / 100.0, 0.5, 1.0)
     local intensity = math.clamp((SimConfig.Get("Intensity") or 75.0) / 100.0, 0.0, 2.0)
-    local maxRadius = SimConfig.Get("VectorRadius") or 250.0
+    local maxRadius = SimConfig.Get("VectorRadius") or 300.0
 
     if dist > maxRadius or angularErrorDeg > fov then
         self.CachedTelemetry.angularVelocity = 0
@@ -659,21 +675,21 @@ function VectorTracker:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Ve
         return self.CachedTelemetry
     end
 
-    -- Curva Hermite Smoothstep com expoente de aceleração
+    -- Curva Hermite Smoothstep com expoente de gradiente
     local normalizedErr = math.clamp(angularErrorDeg / fov, 0.0, 1.0)
     local smoothFactor = normalizedErr * normalizedErr * (3.0 - 2.0 * normalizedErr)
     local accelExponent = SimConfig.Get("AccelerationCurve") or 1.25
     smoothFactor = math.pow(smoothFactor, accelExponent)
 
-    -- Interpolação Frame-rate Independent via Decaimento Exponencial
-    local safeDt = math.clamp(dt or 0.0166, 0.001, 0.1)
+    -- Interpolação Angular Contínua via Decaimento Exponencial (Sem Jittering e Independente de FPS)
+    local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
     local k = (baseSmoothing * 28.0 * speedMult) * (0.35 + 0.65 * smoothFactor)
     local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
-    local targetRotation = CFrame.lookAt(eyePos, targetPosition)
+    local targetRotation = CFrame.lookAt(eyePos, targetPosition, Vector3.yAxis)
     local smoothedRotation = self.CurrentCFrame:Lerp(targetRotation, dynamicAlpha)
 
-    -- Jitter orgânico atenuado perto do centro da mira
+    -- Jitter orgânico sutil
     local jitterAmplitude = (1.0 - precision) * intensity * 0.4 * math.clamp(angularErrorDeg / 10.0, 0.0, 1.0)
     if jitterAmplitude > 0.0001 then
         local now = os.clock()
@@ -727,7 +743,6 @@ function VectorTracker:ExportReport()
     print("=======================================================")
 end
 
--- Aliases para retrocompatibilidade
 local AdvancedKinematics = VectorTracker
 
 -- =========================================================================
@@ -739,7 +754,7 @@ VisualOverlayRenderer.__index = VisualOverlayRenderer
 local MAX_ACTIVE_HIGHLIGHTS = 16
 
 do
-    local activeHighlights = setmetatable({}, { __mode = "k" })
+    local activeHighlights = setmetatable({}, { __mode = "k" }) :: { [Instance]: Highlight }
     local highlightContainer: Folder? = nil
 
     local function GetHighlightContainer(): Folder
@@ -747,7 +762,13 @@ do
             return highlightContainer
         end
 
-        local host = CoreGuiService or (Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")) or Workspace
+        local host: Instance = CoreGuiService
+        local okCore = pcall(function() return CoreGuiService:GetChildren() end)
+        if not okCore then
+            local pGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            host = pGui or Workspace
+        end
+
         local existing = host:FindFirstChild("DeepHat_ESP_Container")
         if existing and existing:IsA("Folder") then
             highlightContainer = existing
@@ -761,17 +782,17 @@ do
         return folder
     end
 
-    local function GetOrCreateHighlight(character: Model?): Highlight?
-        if not character or not character:IsDescendantOf(game) then return nil end
-        local hl = activeHighlights[character]
+    local function GetOrCreateHighlight(target: Instance?): Highlight?
+        if not target or not target:IsDescendantOf(game) then return nil end
+        local hl = activeHighlights[target]
         if not hl or not hl.Parent then
             local count = 0
             for _, _ in pairs(activeHighlights) do count = count + 1 end
             if count >= MAX_ACTIVE_HIGHLIGHTS then
-                for oldChar, oldHl in pairs(activeHighlights) do
-                    if not oldChar:IsDescendantOf(game) then
+                for oldTarget, oldHl in pairs(activeHighlights) do
+                    if not oldTarget:IsDescendantOf(game) then
                         pcall(function() oldHl:Destroy() end)
-                        activeHighlights[oldChar] = nil
+                        activeHighlights[oldTarget] = nil
                         break
                     end
                 end
@@ -780,8 +801,8 @@ do
             local ok, newHl = pcall(function()
                 local container = GetHighlightContainer()
                 local inst = Instance.new("Highlight")
-                inst.Name = "HL_" .. character.Name
-                inst.Adornee = character
+                inst.Name = "HL_" .. target.Name
+                inst.Adornee = target
                 inst.FillTransparency = 0.55
                 inst.OutlineTransparency = 0.05
                 inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -791,23 +812,23 @@ do
             end)
             if ok and newHl then
                 hl = newHl
-                activeHighlights[character] = hl
+                activeHighlights[target] = hl
             end
         end
         return hl
     end
 
-    function VisualOverlayRenderer.UpdateTarget(character: Model?, isObstructed: boolean, isMainTarget: boolean)
-        if not character or not character:IsDescendantOf(game) or not SimConfig.Get("EnableESP") then
-            VisualOverlayRenderer.Clear(character)
+    function VisualOverlayRenderer.UpdateTarget(target: Instance?, isObstructed: boolean, isMainTarget: boolean)
+        if not target or not target:IsDescendantOf(game) or not SimConfig.Get("EnableESP") then
+            VisualOverlayRenderer.Clear(target)
             return
         end
 
-        local hl = GetOrCreateHighlight(character)
+        local hl = GetOrCreateHighlight(target)
         if not hl then return end
 
         pcall(function()
-            hl.Adornee = character
+            hl.Adornee = target
             hl.Enabled = true
             if isMainTarget then
                 if isObstructed then
@@ -828,12 +849,12 @@ do
         end)
     end
 
-    function VisualOverlayRenderer.Clear(character: Model?)
-        if not character then return end
+    function VisualOverlayRenderer.Clear(target: Instance?)
+        if not target then return end
         pcall(function()
-            local hl = activeHighlights[character]
+            local hl = activeHighlights[target]
             if hl then pcall(function() hl:Destroy() end) end
-            activeHighlights[character] = nil
+            activeHighlights[target] = nil
         end)
     end
 
@@ -845,7 +866,6 @@ do
     end
 end
 
--- Aliases para retrocompatibilidade
 local ESPVisualizer = VisualOverlayRenderer
 -- [4/5] MODULO: DashboardGUI (Interface Profissional Dark Theme 3-Colunas)
 -- =========================================================================
@@ -888,8 +908,11 @@ end
 
 function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local function GetSafeGuiParent(): Instance
-        local ok, coreGui = pcall(function() return game:GetService("CoreGui") end)
-        if ok and coreGui then
+        local okHui, hui = pcall(function() return (gethui and gethui()) end)
+        if okHui and hui then return hui end
+
+        local okCore, coreGui = pcall(function() return game:GetService("CoreGui") end)
+        if okCore and coreGui then
             local testOk = pcall(function()
                 local test = Instance.new("Folder")
                 test.Parent = coreGui
@@ -904,8 +927,22 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     local hostParent = parentGui or GetSafeGuiParent()
 
-    local existing = hostParent:FindFirstChild("DiagnosticSimulationDashboard")
-    if existing then existing:Destroy() end
+    -- Destruição Total Prévia da Interface Antiga em todos os contêineres possíveis
+    local targetUINames = { "DiagnosticSimulationDashboard", "KinematicsSimulationDashboard", "DeepHat_GUI", "DeepHat_Dashboard_Pro" }
+    local cleanupContainers = { hostParent }
+    pcall(function() table.insert(cleanupContainers, game:GetService("CoreGui")) end)
+    if LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui") then
+        table.insert(cleanupContainers, LocalPlayer:FindFirstChildOfClass("PlayerGui"))
+    end
+    for _, cont in ipairs(cleanupContainers) do
+        for _, uiName in ipairs(targetUINames) do
+            local found = cont:FindFirstChild(uiName)
+            while found do
+                pcall(function() found:Destroy() end)
+                found = cont:FindFirstChild(uiName)
+            end
+        end
+    end
 
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "DiagnosticSimulationDashboard"
@@ -1619,6 +1656,7 @@ end
 
 -- =========================================================================
 -- =========================================================================
+-- =========================================================================
 -- [5/5] ORQUESTRADOR: EXECUCAO OTIMIZADA COM RASTREIO E CHAMS
 -- =========================================================================
 local guiInstance = DashboardGUI.Create()
@@ -1627,7 +1665,7 @@ local filterInstances: { Instance } = {}
 if LocalPlayer.Character then table.insert(filterInstances, LocalPlayer.Character) end
 
 -- Instanciação dos Módulos Especializados
-local Detector = InstanceDetector.new(0.20) -- 5Hz de debounce na varredura de instâncias
+local Detector = InstanceDetector.new(0.15)
 local Kinematics = VectorTracker.new(Camera.CFrame, filterInstances)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
@@ -1655,10 +1693,10 @@ end)
 -- Debugger de Instâncias no Console
 local lastDebugLog = 0
 local lastTargetName = ""
-local function DebugLog(targetModel: Model?, pos: Vector3?, dist: number?, angleDeg: number?, partLabel: string?, isObstructed: boolean?)
+local function DebugLog(targetInst: Instance?, pos: Vector3?, dist: number?, angleDeg: number?, partLabel: string?, isObstructed: boolean?)
     local now = os.clock()
-    if targetModel and pos then
-        local name = targetModel.Name
+    if targetInst and pos then
+        local name = targetInst.Name
         if name ~= lastTargetName or (now - lastDebugLog > 2.5) then
             lastTargetName = name
             lastDebugLog = now
@@ -1685,17 +1723,18 @@ local function DebugLog(targetModel: Model?, pos: Vector3?, dist: number?, angle
 end
 
 -- Pipeline de Avaliação Geométrica e Extração do Melhor Alvo
-local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
+local function GetTargetData(): (Vector3?, Vector3, Instance?, boolean, string)
     local boneSetting = SimConfig.Get("TargetRegion") or "Head"
     local fov = tonumber(SimConfig.Get("FOV")) or 70.0
     local enableESP = SimConfig.Get("EnableESP")
     local visibleOnly = SimConfig.Get("VisibleOnly")
     local teamCheck = SimConfig.Get("TeamCheck")
+    local maxRadius = SimConfig.Get("VectorRadius") or 300.0
 
     local bestAngle = fov
     local chosenPos: Vector3? = nil
     local chosenVel = Vector3.zero
-    local chosenModel: Model? = nil
+    local chosenTarget: Instance? = nil
     local chosenLabel = "None"
     local isObstructed = false
 
@@ -1703,27 +1742,29 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
     local camLook = Camera.CFrame.LookVector
     local targets = Detector:ScanCandidates(teamCheck)
 
-    for _, char in ipairs(targets) do
-        local currentPos, targetPart, partLabel = Detector:ResolvePivotPosition(char, boneSetting)
+    for _, obj in ipairs(targets) do
+        local currentPos, targetPart, partLabel = Detector:ResolvePivotPosition(obj, boneSetting)
 
         if currentPos then
-            local vel = Kinematics:EstimateVelocity(char, currentPos)
-            local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
+            local displacement = (currentPos - camPos)
+            local dist = displacement.Magnitude
 
-            if enableESP then
-                VisualOverlayRenderer.UpdateTarget(char, obstructed, false)
-            else
-                VisualOverlayRenderer.Clear(char)
-            end
+            -- Filtro de Magnitude (Raio de Atuação)
+            if dist <= maxRadius and dist >= 0.05 then
+                local vel = Kinematics:EstimateVelocity(obj, currentPos)
+                local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
 
-            if visibleOnly and obstructed then
-                continue
-            end
+                if enableESP then
+                    VisualOverlayRenderer.UpdateTarget(obj, obstructed, false)
+                else
+                    VisualOverlayRenderer.Clear(obj)
+                end
 
-            local toTarget = (currentPos - camPos)
-            local dist = toTarget.Magnitude
-            if dist > 0.5 then
-                local dir = toTarget.Unit
+                if visibleOnly and obstructed then
+                    continue
+                end
+
+                local dir = displacement / dist
                 local dot = math.clamp(camLook:Dot(dir), -1.0, 1.0)
                 local angleDeg = math.deg(math.acos(dot))
 
@@ -1731,7 +1772,7 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
                     bestAngle = angleDeg
                     chosenPos = currentPos
                     chosenVel = vel
-                    chosenModel = char
+                    chosenTarget = obj
                     chosenLabel = partLabel
                     isObstructed = obstructed
                 end
@@ -1739,14 +1780,14 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
         end
     end
 
-    if chosenModel and enableESP then
-        VisualOverlayRenderer.UpdateTarget(chosenModel, isObstructed, true)
+    if chosenTarget and enableESP then
+        VisualOverlayRenderer.UpdateTarget(chosenTarget, isObstructed, true)
     end
 
     local chosenDist = chosenPos and (chosenPos - camPos).Magnitude or 0
-    DebugLog(chosenModel, chosenPos, chosenDist, bestAngle, chosenLabel, isObstructed)
+    DebugLog(chosenTarget, chosenPos, chosenDist, bestAngle, chosenLabel, isObstructed)
 
-    return chosenPos, chosenVel, chosenModel, isObstructed, chosenLabel
+    return chosenPos, chosenVel, chosenTarget, isObstructed, chosenLabel
 end
 
 local BIND_PIPELINE = "DeepHat_StandaloneCameraTracking"
@@ -1754,14 +1795,13 @@ local BIND_PIPELINE = "DeepHat_StandaloneCameraTracking"
 DashboardGUI.OnStartRequested = function()
     if isRunning then return end
     isRunning = true
-    print("[DeepHat v4.0 PRO] Simulador ATIVADO! (Zero-Latency + Debugger de Instancias)")
+    print("[DeepHat v5.0 PRO] Simulador ATIVADO! (Anti-Lag & Anti-Fail Rig)")
 
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
 
     RunService:BindToRenderStep(BIND_PIPELINE, Enum.RenderPriority.Camera.Value + 1, function(dt)
-        -- Pipeline de Execução Segura: pcall isola cálculo matemático da câmera e UI
         local ok, _ = pcall(function()
-            local targetPos, targetVel, targetModel, obstructed, partLabel = GetTargetData()
+            local targetPos, targetVel, targetObj, obstructed, partLabel = GetTargetData()
             local now = os.clock()
 
             DashboardGUI:UpdateFovCircle()
@@ -1789,7 +1829,7 @@ DashboardGUI.OnStartRequested = function()
                 if (now - lastUiUpdate) >= 0.066 then
                     lastUiUpdate = now
                     telem.dt = dt
-                    telem.targetName = targetModel and targetModel.Name or "DETECTADO"
+                    telem.targetName = targetObj and targetObj.Name or "DETECTADO"
                     DashboardGUI:UpdateTelemetryDisplay(telem)
                 end
             else
@@ -1807,7 +1847,7 @@ DashboardGUI.OnStartRequested = function()
             end
         end)
         if not ok then
-            -- Aborta o frame silenciosamente em caso de anomalia de instância ou destruição física
+            -- Tratamento silencioso de quadro
         end
     end)
 end
@@ -1818,16 +1858,16 @@ DashboardGUI.OnStopRequested = function()
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
     VisualOverlayRenderer.ClearAll()
     DashboardGUI:UpdateFovCircle()
-    print("[DeepHat v4.0 PRO] Simulador PARADO!")
+    print("[DeepHat v5.0 PRO] Simulador PARADO!")
     DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO", targetName = nil, suspicionScore = 0 })
 end
 
 DashboardGUI.OnResetRequested = function()
-    print("[DeepHat v4.0 PRO] Parametros resetados para Normal!")
+    print("[DeepHat v5.0 PRO] Parametros resetados para Normal!")
 end
 
 DashboardGUI.OnSaveRequested = function()
-    print("[DeepHat v4.0 PRO] Configuracoes salvas!")
+    print("[DeepHat v5.0 PRO] Configuracoes salvas!")
 end
 
 _G.DeepHat_Cleanup = function()
@@ -1862,11 +1902,11 @@ task.defer(function()
     DashboardGUI.OnStartRequested()
 end)
 
-print("[DeepHat v4.0 PRO] Motor de Rastreamento e ESP Carregados! Pressione [HOME] para abrir/fechar.")
+print("[DeepHat v5.0 PRO] Motor de Rastreamento e ESP Carregados! Pressione [HOME] para abrir/fechar.")
 
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "DeepHat v4.0 PRO",
+        Title = "DeepHat v5.0 PRO",
         Text = "Rastreamento e ESP Ativos! Pressione [HOME] para abrir/fechar.",
         Duration = 6
     })
