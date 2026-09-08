@@ -319,9 +319,425 @@ do
 end
 
 -- =========================================================================
--- [2/5] MODULO: ESPVisualizer (Chams com Cores Dinamicas Verde/Vermelho)
 -- =========================================================================
-local ESPVisualizer = {}
+-- [2/5] MODULO: InstanceDetector (Scanner Espacial em Ambientes Complexos)
+-- =========================================================================
+local InstanceDetector = {}
+InstanceDetector.__index = InstanceDetector
+
+export type POIResult = {
+    Position: Vector3,
+    Model: Model,
+    Part: BasePart?,
+    Label: string
+}
+
+function InstanceDetector.new(scanInterval: number?)
+    local self = setmetatable({}, InstanceDetector)
+    self.ScanInterval = scanInterval or 0.20 -- 5Hz de varredura topológica (Debounce de Performance)
+    self.LastScanTime = 0
+    self.CandidatePool = {} :: { Model }
+    self.LocalPlayer = Players.LocalPlayer
+    self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character" }
+    self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
+    return self
+end
+
+function InstanceDetector:IsValidTarget(model: Instance, teamCheck: boolean?): (boolean, Humanoid?)
+    if not model or not model:IsA("Model") or not model:IsDescendantOf(game) then
+        return false, nil
+    end
+
+    local myChar = self.LocalPlayer and self.LocalPlayer.Character
+    if myChar and (model == myChar or model:IsDescendantOf(myChar)) then
+        return false, nil
+    end
+
+    -- Alvo Válido OBRIGATORIAMENTE possui Humanoid ativo (evita destacar o Mapa, Prédios ou Chão)
+    local hum = model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildWhichIsA("Humanoid", true)
+    if not hum or hum.Health <= 0 then
+        return false, nil
+    end
+
+    if teamCheck and self.LocalPlayer and self.LocalPlayer.Team then
+        local otherPlayer = Players:GetPlayerFromCharacter(model)
+        if otherPlayer and otherPlayer.Team == self.LocalPlayer.Team then
+            return false, hum
+        end
+    end
+
+    return true, hum
+end
+
+-- Resolução Afim: :GetPivot().Position como fallback universal para modelos dinâmicos sem PrimaryPart
+function InstanceDetector:ResolvePivotPosition(model: Model, preferredBone: string?): (Vector3?, BasePart?, string)
+    if not model or not model:IsDescendantOf(game) then
+        return nil, nil, "None"
+    end
+
+    local bone = string.lower(preferredBone or SimConfig.Get("TargetRegion") or "head")
+    local targetPart: BasePart? = nil
+    local label = "Pivot"
+
+    -- 1. Resolução hierárquica por ossos do modelo
+    if bone == "head" then
+        targetPart = model:FindFirstChild("Head", true) :: BasePart?
+            or model:FindFirstChild("head", true) :: BasePart?
+        label = "Head"
+    elseif bone == "torso" or bone == "uppertorso" then
+        targetPart = model:FindFirstChild("UpperTorso", true) :: BasePart?
+            or model:FindFirstChild("Torso", true) :: BasePart?
+            or model:FindFirstChild("LowerTorso", true) :: BasePart?
+        label = "Torso"
+    elseif bone == "arms" then
+        targetPart = model:FindFirstChild("RightUpperArm", true) :: BasePart?
+            or model:FindFirstChild("RightArm", true) :: BasePart?
+            or model:FindFirstChild("LeftUpperArm", true) :: BasePart?
+            or model:FindFirstChild("LeftArm", true) :: BasePart?
+        label = "Arms"
+    elseif bone == "legs" then
+        targetPart = model:FindFirstChild("RightUpperLeg", true) :: BasePart?
+            or model:FindFirstChild("RightLeg", true) :: BasePart?
+            or model:FindFirstChild("LeftUpperLeg", true) :: BasePart?
+            or model:FindFirstChild("LeftLeg", true) :: BasePart?
+        label = "Legs"
+    end
+
+    -- 2. Fallbacks de partes estruturais
+    if not targetPart then
+        targetPart = model:FindFirstChild("HumanoidRootPart", true) :: BasePart?
+            or model:FindFirstChild("Head", true) :: BasePart?
+            or model:FindFirstChild("Torso", true) :: BasePart?
+            or model.PrimaryPart
+            or model:FindFirstChildWhichIsA("BasePart", true)
+        if targetPart then
+            label = targetPart.Name
+        end
+    end
+
+    if targetPart then
+        return targetPart.Position, targetPart, label
+    end
+
+    -- 3. Resolução Universal Invariante via CFrame Pivot da Engine
+    local ok, pivot = pcall(function() return model:GetPivot() end)
+    if ok and pivot then
+        return pivot.Position, nil, "Pivot"
+    end
+
+    return nil, nil, "None"
+end
+
+-- Varredura Espacial com Debounce para ambientes com alta densidade de instâncias
+function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boolean?): { Model }
+    local now = os.clock()
+    if not forceRescan and (now - self.LastScanTime < self.ScanInterval) and #self.CandidatePool > 0 then
+        local verifiedPool: { Model } = {}
+        for _, candidate in ipairs(self.CandidatePool) do
+            local valid = self:IsValidTarget(candidate, teamCheck)
+            if valid then
+                table.insert(verifiedPool, candidate)
+            end
+        end
+        self.CandidatePool = verifiedPool
+        return self.CandidatePool
+    end
+
+    self.LastScanTime = now
+    local newPool: { Model } = {}
+    local seen: { [Model]: boolean } = {}
+
+    local function IngestCandidate(inst: Instance)
+        local valid = self:IsValidTarget(inst, teamCheck)
+        if valid and not seen[inst :: Model] then
+            seen[inst :: Model] = true
+            table.insert(newPool, inst :: Model)
+        end
+    end
+
+    -- 1. Jogadores conectados
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= self.LocalPlayer and player.Character then
+            IngestCandidate(player.Character)
+        end
+    end
+
+    -- 2. Pastas organizacionais no Workspace
+    for _, folderName in ipairs(self.SearchFolders) do
+        local container = Workspace:FindFirstChild(folderName)
+        if container then
+            for _, child in ipairs(container:GetChildren()) do
+                if child:IsA("Model") then IngestCandidate(child) end
+            end
+            for _, desc in ipairs(container:GetDescendants()) do
+                if desc:IsA("Model") then IngestCandidate(desc) end
+            end
+        end
+    end
+
+    -- 3. CollectionService Tags
+    local okCs, CollectionService = pcall(function() return game:GetService("CollectionService") end)
+    if okCs and CollectionService then
+        for _, tag in ipairs(self.KnownTags) do
+            for _, tagged in ipairs(CollectionService:GetTagged(tag)) do
+                if tagged:IsA("Model") then IngestCandidate(tagged) end
+            end
+        end
+    end
+
+    -- 4. Filhos da raiz do Workspace
+    for _, child in ipairs(Workspace:GetChildren()) do
+        if child:IsA("Model") then IngestCandidate(child) end
+    end
+
+    self.CandidatePool = newPool
+    return self.CandidatePool
+end
+
+-- =========================================================================
+-- [3/5] MODULO: VectorTracker (Rastreamento Vetorial, Epsilon Guard & Lerp)
+-- =========================================================================
+local VectorTracker = {}
+VectorTracker.__index = VectorTracker
+
+local EPSILON = 1e-4
+
+function VectorTracker.new(initialCFrame: CFrame?, filterInstances: { Instance }?)
+    local self = setmetatable({}, VectorTracker)
+    self.CurrentCFrame = initialCFrame or CFrame.new(0, 5, 0)
+    self.PreviousLookVector = self.CurrentCFrame.LookVector
+    self.PreviousAngularVelocity = 0
+    self.NoiseSeed = math.random(1000, 9999)
+    self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Model]: { pos: Vector3, time: number, vel: Vector3 } }
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = filterInstances or {}
+    rayParams.IgnoreWater = true
+    self.RayParams = rayParams
+
+    self.CachedTelemetry = {
+        angularVelocity = 0,
+        angularJerk = 0,
+        suspicionScore = 0,
+        isObstructed = false,
+        position = Vector3.zero,
+        cframe = self.CurrentCFrame,
+        mode = "SMOOTH",
+        angularErrorDeg = 0,
+        predictedPosition = Vector3.zero
+    }
+
+    self.MetricsHistory = {
+        totalSamples = 0,
+        sumVelocity = 0,
+        peakVelocity = 0,
+        snapCount = 0,
+        obstructedCount = 0
+    }
+
+    return self
+end
+
+function VectorTracker:SetFilterInstances(instances: { Instance })
+    self.RayParams.FilterDescendantsInstances = instances
+end
+
+function VectorTracker:CheckObstruction(fromPos: Vector3, toPos: Vector3): boolean
+    local dir = (toPos - fromPos)
+    local dist = dir.Magnitude
+    if dist < EPSILON then return false end
+    return (Workspace:Raycast(fromPos, (dir / dist) * dist, self.RayParams) ~= nil)
+end
+
+function VectorTracker:EstimateVelocity(model: Model, currentPos: Vector3): Vector3
+    local now = os.clock()
+    local cached = self.VelocityCache[model]
+    local vel = Vector3.zero
+    if cached then
+        local dt = (now - cached.time)
+        if dt > 0.001 and dt < 0.3 then
+            vel = (currentPos - cached.pos) / dt
+        else
+            vel = cached.vel
+        end
+    end
+    self.VelocityCache[model] = { pos = currentPos, time = now, vel = vel }
+    return vel
+end
+
+function VectorTracker:ComputeLead(targetPos: Vector3, targetVelocity: Vector3, eyePos: Vector3): Vector3
+    if not SimConfig.Get("EnableLead") then
+        return targetPos
+    end
+    local projSpeed = SimConfig.Get("ProjectileSpeed") or 800.0
+    local dist = (targetPos - eyePos).Magnitude
+    local timeToHit = projSpeed > 0 and (dist / projSpeed) or 0
+    return targetPos + (targetVelocity * timeToHit)
+end
+
+function VectorTracker:EvaluateSuspicion(angVel: number, jerk: number, isSnap: boolean, obstructed: boolean): number
+    local score = 0
+    if isSnap then score = score + 45 end
+    if angVel > 350 then score = score + math.clamp((angVel - 350) / 10, 0, 30) end
+    if jerk > 4000 then score = score + 15 end
+    if obstructed and angVel > 20 then score = score + 10 end
+    return math.clamp(math.floor(score), 0, 100)
+end
+
+function VectorTracker:StepSnap(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
+    local eyePos = Camera.CFrame.Position
+    local targetPosition = self:ComputeLead(rawTargetPosition, targetVelocity, eyePos)
+    local toTarget = (targetPosition - eyePos)
+    local dist = toTarget.Magnitude
+
+    if dist < EPSILON then return self.CachedTelemetry end
+
+    local dirToTarget = toTarget / dist
+    local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
+    local angularErrorDeg = math.deg(math.acos(dot))
+
+    self.CurrentCFrame = CFrame.lookAt(eyePos, targetPosition)
+    local safeDt = (dt and dt > 0) and dt or 0.0166
+    local angVel = angularErrorDeg / safeDt
+    local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
+    self.PreviousAngularVelocity = angVel
+
+    local isObstructed = self:CheckObstruction(eyePos, targetPosition)
+    local suspicion = self:EvaluateSuspicion(angVel, jerk, true, isObstructed)
+
+    self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
+    self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
+    self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
+    self.MetricsHistory.snapCount = self.MetricsHistory.snapCount + 1
+    if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
+
+    self.CachedTelemetry.angularVelocity = angVel
+    self.CachedTelemetry.angularJerk = jerk
+    self.CachedTelemetry.suspicionScore = suspicion
+    self.CachedTelemetry.isObstructed = isObstructed
+    self.CachedTelemetry.position = eyePos
+    self.CachedTelemetry.cframe = self.CurrentCFrame
+    self.CachedTelemetry.mode = "SNAP"
+    self.CachedTelemetry.angularErrorDeg = 0
+    self.CachedTelemetry.predictedPosition = targetPosition
+    self.PreviousLookVector = self.CurrentCFrame.LookVector
+    return self.CachedTelemetry
+end
+
+function VectorTracker:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
+    local eyePos = Camera.CFrame.Position
+    self.CurrentCFrame = Camera.CFrame
+    local targetPosition = self:ComputeLead(rawTargetPosition, targetVelocity, eyePos)
+    local toTarget = (targetPosition - eyePos)
+    local dist = toTarget.Magnitude
+
+    -- GUARDA EPSILON: Previne divisão por zero e vetores NaN
+    if dist < EPSILON then return self.CachedTelemetry end
+
+    local dirToTarget = toTarget / dist
+    local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
+    local angularErrorDeg = math.deg(math.acos(dot))
+
+    local fov = math.max(SimConfig.Get("FOV") or 60.0, 1.0)
+    local baseSmoothing = math.clamp(SimConfig.Get("Smoothing") or 0.15, 0.005, 1.0)
+    local speedMult = math.clamp((SimConfig.Get("MoveSpeed") or 16.0) / 16.0, 0.25, 3.0)
+    local precision = math.clamp((SimConfig.Get("TrackingPrecision") or 98.5) / 100.0, 0.5, 1.0)
+    local intensity = math.clamp((SimConfig.Get("Intensity") or 75.0) / 100.0, 0.0, 2.0)
+    local maxRadius = SimConfig.Get("VectorRadius") or 250.0
+
+    if dist > maxRadius or angularErrorDeg > fov then
+        self.CachedTelemetry.angularVelocity = 0
+        self.CachedTelemetry.angularJerk = 0
+        self.CachedTelemetry.suspicionScore = 0
+        self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
+        self.CachedTelemetry.position = eyePos
+        self.CachedTelemetry.cframe = self.CurrentCFrame
+        self.CachedTelemetry.mode = "IDLE"
+        self.CachedTelemetry.angularErrorDeg = angularErrorDeg
+        self.CachedTelemetry.predictedPosition = targetPosition
+        return self.CachedTelemetry
+    end
+
+    -- Curva Hermite Smoothstep com expoente de aceleração
+    local normalizedErr = math.clamp(angularErrorDeg / fov, 0.0, 1.0)
+    local smoothFactor = normalizedErr * normalizedErr * (3.0 - 2.0 * normalizedErr)
+    local accelExponent = SimConfig.Get("AccelerationCurve") or 1.25
+    smoothFactor = math.pow(smoothFactor, accelExponent)
+
+    -- Interpolação Frame-rate Independent via Decaimento Exponencial
+    local safeDt = math.clamp(dt or 0.0166, 0.001, 0.1)
+    local k = (baseSmoothing * 28.0 * speedMult) * (0.35 + 0.65 * smoothFactor)
+    local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
+
+    local targetRotation = CFrame.lookAt(eyePos, targetPosition)
+    local smoothedRotation = self.CurrentCFrame:Lerp(targetRotation, dynamicAlpha)
+
+    -- Jitter orgânico atenuado perto do centro da mira
+    local jitterAmplitude = (1.0 - precision) * intensity * 0.4 * math.clamp(angularErrorDeg / 10.0, 0.0, 1.0)
+    if jitterAmplitude > 0.0001 then
+        local now = os.clock()
+        local noiseFreq = 3.5 * intensity
+        local pitchJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed, 0.5) * jitterAmplitude)
+        local yawJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed + 100, 0.5) * jitterAmplitude)
+        self.CurrentCFrame = smoothedRotation * CFrame.Angles(pitchJitter, yawJitter, 0)
+    else
+        self.CurrentCFrame = smoothedRotation
+    end
+
+    local actualDir = self.CurrentCFrame.LookVector
+    local actualDot = math.clamp(self.PreviousLookVector:Dot(actualDir), -1.0, 1.0)
+    local actualDegMoved = math.deg(math.acos(actualDot))
+    local angVel = actualDegMoved / safeDt
+    local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
+    self.PreviousAngularVelocity = angVel
+    self.PreviousLookVector = actualDir
+
+    local isObstructed = self:CheckObstruction(eyePos, targetPosition)
+    local suspicion = self:EvaluateSuspicion(angVel, jerk, false, isObstructed)
+
+    self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
+    self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
+    self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
+    if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
+
+    self.CachedTelemetry.angularVelocity = angVel
+    self.CachedTelemetry.angularJerk = jerk
+    self.CachedTelemetry.suspicionScore = suspicion
+    self.CachedTelemetry.isObstructed = isObstructed
+    self.CachedTelemetry.position = eyePos
+    self.CachedTelemetry.cframe = self.CurrentCFrame
+    self.CachedTelemetry.mode = "SMOOTH"
+    self.CachedTelemetry.angularErrorDeg = angularErrorDeg
+    self.CachedTelemetry.predictedPosition = targetPosition
+    return self.CachedTelemetry
+end
+
+function VectorTracker:ExportReport()
+    local hist = self.MetricsHistory
+    local avg = hist.totalSamples > 0 and (hist.sumVelocity / hist.totalSamples) or 0
+    print("=======================================================")
+    print("          RELATORIO DE TELEMETRIA DE AGENTE 3D         ")
+    print("=======================================================")
+    print(string.format("  Total de Quadros Amostrados: %d", hist.totalSamples))
+    print(string.format("  Velocidade Angular Media:    %.2f deg/s", avg))
+    print(string.format("  Pico de Velocidade Angular:  %.2f deg/s", hist.peakVelocity))
+    print(string.format("  Transicoes Snap (Agressivas):%d", hist.snapCount))
+    print(string.format("  Oclusoes Detectadas (Paredes):%d", hist.obstructedCount))
+    print("=======================================================")
+end
+
+-- Aliases para retrocompatibilidade
+local AdvancedKinematics = VectorTracker
+
+-- =========================================================================
+-- [4/5] MODULO: VisualOverlayRenderer (Realce Visual e Highlight Pooling)
+-- =========================================================================
+local VisualOverlayRenderer = {}
+VisualOverlayRenderer.__index = VisualOverlayRenderer
+
+local MAX_ACTIVE_HIGHLIGHTS = 16
+
 do
     local activeHighlights = setmetatable({}, { __mode = "k" })
     local highlightContainer: Folder? = nil
@@ -331,7 +747,7 @@ do
             return highlightContainer
         end
 
-        local host = CoreGuiService or (game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")) or Workspace
+        local host = CoreGuiService or (Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")) or Workspace
         local existing = host:FindFirstChild("DeepHat_ESP_Container")
         if existing and existing:IsA("Folder") then
             highlightContainer = existing
@@ -346,15 +762,27 @@ do
     end
 
     local function GetOrCreateHighlight(character: Model?): Highlight?
-        if not character or not character.Parent then return nil end
+        if not character or not character:IsDescendantOf(game) then return nil end
         local hl = activeHighlights[character]
         if not hl or not hl.Parent then
+            local count = 0
+            for _, _ in pairs(activeHighlights) do count = count + 1 end
+            if count >= MAX_ACTIVE_HIGHLIGHTS then
+                for oldChar, oldHl in pairs(activeHighlights) do
+                    if not oldChar:IsDescendantOf(game) then
+                        pcall(function() oldHl:Destroy() end)
+                        activeHighlights[oldChar] = nil
+                        break
+                    end
+                end
+            end
+
             local ok, newHl = pcall(function()
                 local container = GetHighlightContainer()
                 local inst = Instance.new("Highlight")
                 inst.Name = "HL_" .. character.Name
                 inst.Adornee = character
-                inst.FillTransparency = 0.60
+                inst.FillTransparency = 0.55
                 inst.OutlineTransparency = 0.05
                 inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                 inst.Enabled = true
@@ -369,9 +797,9 @@ do
         return hl
     end
 
-    function ESPVisualizer.UpdateTarget(character: Model?, isObstructed: boolean, isMainTarget: boolean)
-        if not character or not character.Parent or not SimConfig.Get("EnableESP") then
-            ESPVisualizer.Clear(character)
+    function VisualOverlayRenderer.UpdateTarget(character: Model?, isObstructed: boolean, isMainTarget: boolean)
+        if not character or not character:IsDescendantOf(game) or not SimConfig.Get("EnableESP") then
+            VisualOverlayRenderer.Clear(character)
             return
         end
 
@@ -382,7 +810,6 @@ do
             hl.Adornee = character
             hl.Enabled = true
             if isMainTarget then
-                -- Alvo focado na mira: Verde Neon brilhante (Visivel) ou Vermelho Vivo (Parede)
                 if isObstructed then
                     hl.FillColor = Color3.fromRGB(255, 45, 45)
                     hl.OutlineColor = Color3.fromRGB(255, 180, 180)
@@ -390,265 +817,36 @@ do
                     hl.FillColor = Color3.fromRGB(46, 230, 110)
                     hl.OutlineColor = Color3.fromRGB(200, 255, 200)
                 end
-                hl.FillTransparency = 0.30
+                hl.FillTransparency = 0.35
                 hl.OutlineTransparency = 0.02
             else
-                -- Outros alvos no ambiente: Azul/Ciano (Visivel) ou Vermelho suave (Parede)
                 hl.FillColor = isObstructed and Color3.fromRGB(180, 70, 70) or Color3.fromRGB(50, 140, 230)
                 hl.OutlineColor = Color3.fromRGB(240, 240, 240)
                 hl.FillTransparency = 0.65
-                hl.OutlineTransparency = 0.25
+                hl.OutlineTransparency = 0.20
             end
         end)
     end
 
-    function ESPVisualizer.Clear(character: Model?)
+    function VisualOverlayRenderer.Clear(character: Model?)
         if not character then return end
         pcall(function()
             local hl = activeHighlights[character]
-            if hl then
-                pcall(function() hl:Destroy() end)
-            end
+            if hl then pcall(function() hl:Destroy() end) end
             activeHighlights[character] = nil
         end)
     end
 
-    function ESPVisualizer.ClearAll()
-        for char, hl in pairs(activeHighlights) do
-            pcall(function()
-                if hl then hl:Destroy() end
-            end)
+    function VisualOverlayRenderer.ClearAll()
+        for _, hl in pairs(activeHighlights) do
+            pcall(function() if hl then hl:Destroy() end end)
         end
         table.clear(activeHighlights)
     end
 end
 
--- =========================================================================
--- [3/5] MODULO: AdvancedKinematics (Motor Fisico, Previsao e Telemetria)
--- =========================================================================
-local AdvancedKinematics = {}
-AdvancedKinematics.__index = AdvancedKinematics
-
-do
-    local function Smoothstep(x: number): number
-        local clamped = math.clamp(x, 0.0, 1.0)
-        return clamped * clamped * (3.0 - 2.0 * clamped)
-    end
-
-    function AdvancedKinematics.new(initialCFrame: CFrame?, filterInstances: { Instance }?)
-        local self = setmetatable({}, AdvancedKinematics)
-        self.CurrentCFrame = initialCFrame or CFrame.new(0, 5, 0)
-        self.PreviousLookVector = self.CurrentCFrame.LookVector
-        self.PreviousAngularVelocity = 0
-        self.NoiseSeed = math.random(1000, 9999)
-
-        local rayParams = RaycastParams.new()
-        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-        rayParams.FilterDescendantsInstances = filterInstances or {}
-        rayParams.IgnoreWater = true
-        self.RayParams = rayParams
-
-        self.CachedTelemetry = {
-            angularVelocity = 0,
-            angularJerk = 0,
-            suspicionScore = 0,
-            isObstructed = false,
-            position = Vector3.zero,
-            cframe = self.CurrentCFrame,
-            mode = "SMOOTH",
-            angularErrorDeg = 0,
-            predictedPosition = Vector3.zero
-        }
-
-        self.MetricsHistory = {
-            totalSamples = 0,
-            sumVelocity = 0,
-            peakVelocity = 0,
-            snapCount = 0,
-            obstructedCount = 0
-        }
-
-        return self
-    end
-
-    function AdvancedKinematics:SetFilterInstances(instances: { Instance })
-        self.RayParams.FilterDescendantsInstances = instances
-    end
-
-    function AdvancedKinematics:CheckObstruction(fromPos: Vector3, toPos: Vector3): boolean
-        local dir = (toPos - fromPos)
-        if dir.Magnitude < 0.05 then return false end
-        return (workspace:Raycast(fromPos, dir, self.RayParams) ~= nil)
-    end
-
-    -- Previsao Balistica de Trajetoria (Lead Prediction)
-    function AdvancedKinematics:ComputeLead(targetPos: Vector3, targetVelocity: Vector3, eyePos: Vector3): Vector3
-        if not SimConfig.Get("EnableLead") then
-            return targetPos
-        end
-        local projSpeed = SimConfig.Get("ProjectileSpeed") or 800.0
-        local dist = (targetPos - eyePos).Magnitude
-        local timeToHit = projSpeed > 0 and (dist / projSpeed) or 0
-        -- Posicao futura = P0 + V * t
-        return targetPos + (targetVelocity * timeToHit)
-    end
-
-    function AdvancedKinematics:EvaluateSuspicion(angVel: number, jerk: number, isSnap: boolean, obstructed: boolean): number
-        local score = 0
-        if isSnap then score = score + 45 end
-        if angVel > 350 then score = score + math.clamp((angVel - 350) / 10, 0, 30) end
-        if jerk > 4000 then score = score + 15 end
-        if obstructed and angVel > 20 then score = score + 10 end
-        return math.clamp(math.floor(score), 0, 100)
-    end
-
-    function AdvancedKinematics:StepSnap(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
-        local eyePos = Camera.CFrame.Position
-        local targetPosition = self:ComputeLead(rawTargetPosition, targetVelocity, eyePos)
-        local toTarget = (targetPosition - eyePos)
-        if toTarget.Magnitude < 0.001 then return self.CachedTelemetry end
-
-        local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(toTarget.Unit), -1.0, 1.0)
-        local angularErrorDeg = math.deg(math.acos(dot))
-
-        self.CurrentCFrame = CFrame.lookAt(eyePos, targetPosition)
-        local safeDt = (dt and dt > 0) and dt or 0.0166
-        local angVel = angularErrorDeg / safeDt
-        local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
-        self.PreviousAngularVelocity = angVel
-
-        local isObstructed = self:CheckObstruction(eyePos, targetPosition)
-        local suspicion = self:EvaluateSuspicion(angVel, jerk, true, isObstructed)
-
-        self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
-        self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
-        self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
-        self.MetricsHistory.snapCount = self.MetricsHistory.snapCount + 1
-        if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
-
-        self.CachedTelemetry.angularVelocity = angVel
-        self.CachedTelemetry.angularJerk = jerk
-        self.CachedTelemetry.suspicionScore = suspicion
-        self.CachedTelemetry.isObstructed = isObstructed
-        self.CachedTelemetry.position = eyePos
-        self.CachedTelemetry.cframe = self.CurrentCFrame
-        self.CachedTelemetry.mode = "SNAP"
-        self.CachedTelemetry.angularErrorDeg = 0
-        self.CachedTelemetry.predictedPosition = targetPosition
-        self.PreviousLookVector = self.CurrentCFrame.LookVector
-        return self.CachedTelemetry
-    end
-
-        function AdvancedKinematics:StepSmooth(rawTargetPosition: Vector3, targetVelocity: Vector3, dt: number)
-        local eyePos = Camera.CFrame.Position
-        self.CurrentCFrame = Camera.CFrame
-        local targetPosition = self:ComputeLead(rawTargetPosition, targetVelocity, eyePos)
-        local toTarget = (targetPosition - eyePos)
-        local dist = toTarget.Magnitude
-
-        -- Otimizacao de Magnitude & Guarda Epsilon
-        if dist < 0.001 then return self.CachedTelemetry end
-
-        -- Vetor unitario direto sem recalculate de magnitude
-        local dirToTarget = toTarget / dist
-        local dot = math.clamp(self.CurrentCFrame.LookVector:Dot(dirToTarget), -1.0, 1.0)
-        local angularErrorDeg = math.deg(math.acos(dot))
-
-        local fov = math.max(SimConfig.Get("FOV") or 60.0, 1.0)
-        local baseSmoothing = math.clamp(SimConfig.Get("Smoothing") or 0.15, 0.005, 1.0)
-        local speedMult = math.clamp((SimConfig.Get("MoveSpeed") or 16.0) / 16.0, 0.25, 3.0)
-        local precision = math.clamp((SimConfig.Get("TrackingPrecision") or 98.5) / 100.0, 0.5, 1.0)
-        local intensity = math.clamp((SimConfig.Get("Intensity") or 75.0) / 100.0, 0.0, 2.0)
-        local maxRadius = SimConfig.Get("VectorRadius") or 250.0
-
-        if dist > maxRadius or angularErrorDeg > fov then
-            self.CachedTelemetry.angularVelocity = 0
-            self.CachedTelemetry.angularJerk = 0
-            self.CachedTelemetry.suspicionScore = 0
-            self.CachedTelemetry.isObstructed = self:CheckObstruction(eyePos, targetPosition)
-            self.CachedTelemetry.position = eyePos
-            self.CachedTelemetry.cframe = self.CurrentCFrame
-            self.CachedTelemetry.mode = "IDLE"
-            self.CachedTelemetry.angularErrorDeg = angularErrorDeg
-            self.CachedTelemetry.predictedPosition = targetPosition
-            return self.CachedTelemetry
-        end
-
-        -- Curva de Aceleracao Hermite Smoothstep com expoente de gradiente
-        local normalizedErr = math.clamp(angularErrorDeg / fov, 0.0, 1.0)
-        local smoothFactor = normalizedErr * normalizedErr * (3.0 - 2.0 * normalizedErr)
-        local accelExponent = SimConfig.Get("AccelerationCurve") or 1.25
-        smoothFactor = math.pow(smoothFactor, accelExponent)
-
-        -- Interpolacao Frame-rate Independent via Exponential Decay (Sem Jittering e Sem Delay)
-        local safeDt = math.clamp(dt or 0.0166, 0.001, 0.1)
-        local k = (baseSmoothing * 28.0 * speedMult) * (0.35 + 0.65 * smoothFactor)
-        local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
-
-        local targetRotation = CFrame.lookAt(eyePos, targetPosition)
-        local smoothedRotation = self.CurrentCFrame:Lerp(targetRotation, dynamicAlpha)
-
-        -- Jitter organico atenuado perto do centro da mira
-        local jitterAmplitude = (1.0 - precision) * intensity * 0.4 * math.clamp(angularErrorDeg / 10.0, 0.0, 1.0)
-        if jitterAmplitude > 0.0001 then
-            local now = os.clock()
-            local noiseFreq = 3.5 * intensity
-            local pitchJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed, 0.5) * jitterAmplitude)
-            local yawJitter = math.rad(math.noise(now * noiseFreq, self.NoiseSeed + 100, 0.5) * jitterAmplitude)
-            self.CurrentCFrame = smoothedRotation * CFrame.Angles(pitchJitter, yawJitter, 0)
-        else
-            self.CurrentCFrame = smoothedRotation
-        end
-
-        local newLook = self.CurrentCFrame.LookVector
-        local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
-        local angVel = math.deg(math.acos(deltaDot)) / safeDt
-        local jerk = math.abs(angVel - self.PreviousAngularVelocity) / safeDt
-        self.PreviousAngularVelocity = angVel
-        self.PreviousLookVector = newLook
-
-        local isObstructed = self:CheckObstruction(eyePos, targetPosition)
-        local suspicion = self:EvaluateSuspicion(angVel, jerk, false, isObstructed)
-
-        self.MetricsHistory.totalSamples = self.MetricsHistory.totalSamples + 1
-        self.MetricsHistory.sumVelocity = self.MetricsHistory.sumVelocity + angVel
-        self.MetricsHistory.peakVelocity = math.max(self.MetricsHistory.peakVelocity, angVel)
-        if isObstructed then self.MetricsHistory.obstructedCount = self.MetricsHistory.obstructedCount + 1 end
-
-        self.CachedTelemetry.angularVelocity = angVel
-        self.CachedTelemetry.angularJerk = jerk
-        self.CachedTelemetry.suspicionScore = suspicion
-        self.CachedTelemetry.isObstructed = isObstructed
-        self.CachedTelemetry.position = eyePos
-        self.CachedTelemetry.cframe = self.CurrentCFrame
-        self.CachedTelemetry.mode = "SMOOTH"
-        self.CachedTelemetry.angularErrorDeg = angularErrorDeg
-        self.CachedTelemetry.predictedPosition = targetPosition
-        return self.CachedTelemetry
-    end
-
-    function AdvancedKinematics:ExportReport()
-        local hist = self.MetricsHistory
-        local avg = hist.totalSamples > 0 and (hist.sumVelocity / hist.totalSamples) or 0
-        local obsRatio = hist.totalSamples > 0 and (hist.obstructedCount / hist.totalSamples * 100) or 0
-        local snapRatio = hist.totalSamples > 0 and (hist.snapCount / hist.totalSamples * 100) or 0
-
-        print("=======================================================")
-        print("          RELATORIO DE TELEMETRIA DE AGENTE 3D         ")
-        print("=======================================================")
-        print(string.format("  Total de Quadros Amostrados: %d", hist.totalSamples))
-        print(string.format("  Velocidade Angular Media:    %.2f deg/s", avg))
-        print(string.format("  Pico de Velocidade Angular:  %.2f deg/s", hist.peakVelocity))
-        print(string.format("  Proporcao de Snaps Bruscos:  %.1f%%", snapRatio))
-        print(string.format("  Rastreamento Ocluido/Parede: %.1f%%", obsRatio))
-        print(string.format("  Previsao Balistica Ativa:    %s", tostring(SimConfig.Get("EnableLead"))))
-        print(string.format("  Osso Alvo Selecionado:       %s", tostring(SimConfig.Get("TargetBone"))))
-        print("=======================================================")
-    end
-end
-
-
--- =========================================================================
+-- Aliases para retrocompatibilidade
+local ESPVisualizer = VisualOverlayRenderer
 -- [4/5] MODULO: DashboardGUI (Interface Profissional Dark Theme 3-Colunas)
 -- =========================================================================
 local DashboardGUI = {}
@@ -1420,13 +1618,17 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 end
 
 -- =========================================================================
+-- =========================================================================
 -- [5/5] ORQUESTRADOR: EXECUCAO OTIMIZADA COM RASTREIO E CHAMS
 -- =========================================================================
 local guiInstance = DashboardGUI.Create()
 
 local filterInstances: { Instance } = {}
 if LocalPlayer.Character then table.insert(filterInstances, LocalPlayer.Character) end
-local Kinematics = AdvancedKinematics.new(Camera.CFrame, filterInstances)
+
+-- Instanciação dos Módulos Especializados
+local Detector = InstanceDetector.new(0.20) -- 5Hz de debounce na varredura de instâncias
+local Kinematics = VectorTracker.new(Camera.CFrame, filterInstances)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
     table.clear(filterInstances)
@@ -1437,66 +1639,6 @@ end)
 local isRunning = false
 local lastSnapTime = 0
 local lastUiUpdate = 0
-
--- Rastreio de velocidade anterior dos alvos para calculo do vetor aceleracao (Tabela Fraca)
-local targetLastPosCache = setmetatable({}, { __mode = "k" })
-
--- Extrai coordenadas precisas: Suporte a R15, R6, Dummies e Fallback de PrimaryPart/GetPivot
-local function GetTargetPositionAndPart(char: Model?, boneSetting: string?): (Vector3?, BasePart?, string)
-    if not char or not char.Parent then return nil, nil, "None" end
-
-    local bone = string.lower(SimConfig.Get("TargetRegion") or SimConfig.Get("TargetBone") or boneSetting or "head")
-    local targetPart: BasePart? = nil
-    local partLabel = "Pivot"
-
-    -- 1. Busca recursiva por ossos especificos
-    if bone == "head" then
-        targetPart = char:FindFirstChild("Head", true) :: BasePart?
-            or char:FindFirstChild("head", true) :: BasePart?
-        partLabel = "Head"
-    elseif bone == "torso" or bone == "uppertorso" then
-        targetPart = char:FindFirstChild("UpperTorso", true) :: BasePart?
-            or char:FindFirstChild("Torso", true) :: BasePart?
-            or char:FindFirstChild("LowerTorso", true) :: BasePart?
-        partLabel = "Torso"
-    elseif bone == "arms" then
-        targetPart = char:FindFirstChild("RightUpperArm", true) :: BasePart?
-            or char:FindFirstChild("RightArm", true) :: BasePart?
-            or char:FindFirstChild("LeftUpperArm", true) :: BasePart?
-            or char:FindFirstChild("LeftArm", true) :: BasePart?
-        partLabel = "Arms"
-    elseif bone == "legs" then
-        targetPart = char:FindFirstChild("RightUpperLeg", true) :: BasePart?
-            or char:FindFirstChild("RightLeg", true) :: BasePart?
-            or char:FindFirstChild("LeftUpperLeg", true) :: BasePart?
-            or char:FindFirstChild("LeftLeg", true) :: BasePart?
-        partLabel = "Legs"
-    end
-
-    -- 2. Fallbacks de partes fisicas padrao
-    if not targetPart then
-        targetPart = char:FindFirstChild("HumanoidRootPart", true) :: BasePart?
-            or char:FindFirstChild("Head", true) :: BasePart?
-            or char:FindFirstChild("Torso", true) :: BasePart?
-            or char.PrimaryPart
-            or char:FindFirstChildWhichIsA("BasePart", true)
-        if targetPart then
-            partLabel = targetPart.Name
-        end
-    end
-
-    if targetPart then
-        return targetPart.Position, targetPart, partLabel
-    end
-
-    -- 3. Fallback Infalivel: :GetPivot() (Funciona em 100% dos modelos do Roblox)
-    local ok, pivot = pcall(function() return char:GetPivot() end)
-    if ok and pivot then
-        return pivot.Position, nil, "Pivot"
-    end
-
-    return nil, nil, "None"
-end
 
 local isRightMouseDown = false
 UserInputService.InputBegan:Connect(function(input)
@@ -1509,95 +1651,6 @@ UserInputService.InputEnded:Connect(function(input)
         isRightMouseDown = false
     end
 end)
-
-local function IsTeammate(otherPlayer: Player?): boolean
-    if not SimConfig.Get("TeamCheck") or not otherPlayer then return false end
-    if LocalPlayer.Team and otherPlayer.Team then
-        return LocalPlayer.Team == otherPlayer.Team
-    end
-    return false
-end
-
--- Descoberta Universal de Alvos: Jogadores Reais + Dummies de Sandbox + NPCs
-local function GetAllTargetCharacters(): { Model }
-    local targets: { Model } = {}
-    local seen: { [Model]: boolean } = {}
-    local myChar = LocalPlayer.Character
-
-    local function ConsiderModel(model: Instance)
-        if not model or not model:IsA("Model") or model == myChar or seen[model] then return end
-        if myChar and model:IsDescendantOf(myChar) then return end
-
-        -- CRÍTICO: Um alvo VÁLIDO deve OBRIGATORIAMENTE possuir um Humanoid (Jogador, Dummy, NPC)!
-        -- Modelos sem Humanoid são o MAPA, PRÉDIOS, CHÃO ou CENÁRIO e NUNCA devem ser destacados!
-        local hum = model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildWhichIsA("Humanoid", true)
-        if not hum then
-            return
-        end
-
-        -- Se a entidade estiver morta, ignora
-        if hum.Health <= 0 then
-            return
-        end
-
-        -- Deve ter ao menos uma parte de corpo identificável
-        local root = model:FindFirstChild("HumanoidRootPart", true)
-            or model:FindFirstChild("Head", true)
-            or model:FindFirstChild("Torso", true)
-            or model:FindFirstChild("UpperTorso", true)
-            or model.PrimaryPart
-            or model:FindFirstChildWhichIsA("BasePart", true)
-
-        if not root then
-            return
-        end
-
-        seen[model] = true
-        table.insert(targets, model)
-    end
-
-    -- 1. Jogadores reais
-    for _, other in ipairs(Players:GetPlayers()) do
-        if other ~= LocalPlayer and other.Character and not IsTeammate(other) then
-            ConsiderModel(other.Character)
-        end
-    end
-
-    -- 2. Varredura recursiva em pastas comuns de jogos e sandbox
-    local searchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
-    for _, name in ipairs(searchFolders) do
-        local f = Workspace:FindFirstChild(name)
-        if f then
-            for _, child in ipairs(f:GetChildren()) do
-                ConsiderModel(child)
-            end
-            for _, desc in ipairs(f:GetDescendants()) do
-                if desc:IsA("Model") then
-                    ConsiderModel(desc)
-                end
-            end
-        end
-    end
-
-    -- 3. Varredura direta na raiz do Workspace
-    for _, child in ipairs(Workspace:GetChildren()) do
-        ConsiderModel(child)
-    end
-
-    -- 4. CollectionService (Tags de NPCs / Inimigos)
-    local okCs, CollectionService = pcall(function() return game:GetService("CollectionService") end)
-    if okCs and CollectionService then
-        for _, tag in ipairs({ "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy" }) do
-            for _, tagged in ipairs(CollectionService:GetTagged(tag)) do
-                if tagged:IsA("Model") then
-                    ConsiderModel(tagged)
-                end
-            end
-        end
-    end
-
-    return targets
-end
 
 -- Debugger de Instâncias no Console
 local lastDebugLog = 0
@@ -1621,21 +1674,23 @@ local function DebugLog(targetModel: Model?, pos: Vector3?, dist: number?, angle
     else
         if (now - lastDebugLog > 4.0) then
             lastDebugLog = now
-            local allCount = #GetAllTargetCharacters()
+            local allCount = #Detector:ScanCandidates(SimConfig.Get("TeamCheck"))
             if allCount == 0 then
-                warn("[DeepHat Debugger] ⚠️ Nenhuma instância alvo encontrada no ambiente. Aguardando modelos no Workspace/Players...")
+                warn("[DeepHat Debugger] ⚠️ Nenhuma entidade alvo encontrada no ambiente. Aguardando modelos no Workspace/Players...")
             else
-                print(string.format("[DeepHat Debugger] 🔍 %d instâncias detectadas no mapa, mas fora do FOV atual. Aponte a câmera para o alvo.", allCount))
+                print(string.format("[DeepHat Debugger] 🔍 %d entidades detectadas no mapa, mas fora do FOV atual. Aponte a câmera para o alvo.", allCount))
             end
         end
     end
 end
 
+-- Pipeline de Avaliação Geométrica e Extração do Melhor Alvo
 local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
     local boneSetting = SimConfig.Get("TargetRegion") or "Head"
     local fov = tonumber(SimConfig.Get("FOV")) or 70.0
     local enableESP = SimConfig.Get("EnableESP")
     local visibleOnly = SimConfig.Get("VisibleOnly")
+    local teamCheck = SimConfig.Get("TeamCheck")
 
     local bestAngle = fov
     local chosenPos: Vector3? = nil
@@ -1644,42 +1699,27 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
     local chosenLabel = "None"
     local isObstructed = false
 
-    local now = os.clock()
     local camPos = Camera.CFrame.Position
     local camLook = Camera.CFrame.LookVector
-    local targets = GetAllTargetCharacters()
+    local targets = Detector:ScanCandidates(teamCheck)
 
     for _, char in ipairs(targets) do
-        local currentPos, targetPart, partLabel = GetTargetPositionAndPart(char, boneSetting)
+        local currentPos, targetPart, partLabel = Detector:ResolvePivotPosition(char, boneSetting)
 
         if currentPos then
-            -- Calculo de velocidade vetorial V = deltaP / deltaT
-            local vel = Vector3.zero
-            local last = targetLastPosCache[char]
-            if last then
-                local dt = (now - last.time)
-                if dt > 0 and dt < 0.25 then
-                    vel = (currentPos - last.pos) / dt
-                end
-            end
-            targetLastPosCache[char] = { pos = currentPos, time = now }
-
-            -- Checagem de obstrucao de visao (WallCheck)
+            local vel = Kinematics:EstimateVelocity(char, currentPos)
             local obstructed = Kinematics:CheckObstruction(camPos, currentPos)
 
-            -- Atualiza ESP Chams
             if enableESP then
-                ESPVisualizer.UpdateTarget(char, obstructed, false)
+                VisualOverlayRenderer.UpdateTarget(char, obstructed, false)
             else
-                ESPVisualizer.Clear(char)
+                VisualOverlayRenderer.Clear(char)
             end
 
-            -- Se "Apenas Visiveis" estiver ativo, ignora alvos atras da parede
             if visibleOnly and obstructed then
                 continue
             end
 
-            -- Checagem de raio angular do FOV
             local toTarget = (currentPos - camPos)
             local dist = toTarget.Magnitude
             if dist > 0.5 then
@@ -1699,12 +1739,10 @@ local function GetTargetData(): (Vector3?, Vector3, Model?, boolean, string)
         end
     end
 
-    -- Destaca o alvo focado com destaque no ESP
     if chosenModel and enableESP then
-        ESPVisualizer.UpdateTarget(chosenModel, isObstructed, true)
+        VisualOverlayRenderer.UpdateTarget(chosenModel, isObstructed, true)
     end
 
-    -- Dispara log do Debugger
     local chosenDist = chosenPos and (chosenPos - camPos).Magnitude or 0
     DebugLog(chosenModel, chosenPos, chosenDist, bestAngle, chosenLabel, isObstructed)
 
@@ -1724,7 +1762,6 @@ DashboardGUI.OnStartRequested = function()
         local targetPos, targetVel, targetModel, obstructed, partLabel = GetTargetData()
         local now = os.clock()
 
-        -- Atualiza o circulo de FOV visual
         DashboardGUI:UpdateFovCircle()
 
         local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
@@ -1743,7 +1780,6 @@ DashboardGUI.OnStartRequested = function()
                 telem = Kinematics:StepSmooth(targetPos, targetVel, dt)
             end
 
-            -- Rastreamento instantaneo da camera
             if telem and telem.cframe then
                 Camera.CFrame = telem.cframe
             end
@@ -1774,7 +1810,7 @@ DashboardGUI.OnStopRequested = function()
     if not isRunning then return end
     isRunning = false
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
-    ESPVisualizer.ClearAll()
+    VisualOverlayRenderer.ClearAll()
     DashboardGUI:UpdateFovCircle()
     print("[DeepHat v4.0 PRO] Simulador PARADO!")
     DashboardGUI:UpdateTelemetryDisplay({ angularVelocity = 0, isObstructed = false, mode = "PARADO", targetName = nil, suspicionScore = 0 })
@@ -1790,22 +1826,21 @@ end
 
 _G.DeepHat_Cleanup = function()
     pcall(function() RunService:UnbindFromRenderStep(BIND_PIPELINE) end)
-    ESPVisualizer.ClearAll()
+    VisualOverlayRenderer.ClearAll()
     if guiInstance and guiInstance.Parent then guiInstance:Destroy() end
 end
 
 Players.PlayerRemoving:Connect(function(plr)
     pcall(function()
         if plr and plr.Character then
-            ESPVisualizer.Clear(plr.Character)
-            pcall(function() targetLastPosCache[plr.Character] = nil end)
+            VisualOverlayRenderer.Clear(plr.Character)
         end
     end)
 end)
 
 SimConfig.Subscribe("EnableESP", function(enabled)
     if not enabled then
-        ESPVisualizer.ClearAll()
+        VisualOverlayRenderer.ClearAll()
     end
 end)
 
@@ -1817,7 +1852,6 @@ SimConfig.Subscribe("FOV", function()
     DashboardGUI:UpdateFovCircle()
 end)
 
--- Inicia automaticamente todas as funcoes para funcionar direto ao injetar!
 task.defer(function()
     DashboardGUI.OnStartRequested()
 end)
