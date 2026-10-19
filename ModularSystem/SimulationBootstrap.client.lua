@@ -72,14 +72,53 @@ local Renderer = VisualOverlayRenderer.new()
 local triggerShotRequested = false
 local triggerSource = "Nenhum"
 local lastSilentAimLogTime = 0
+local currentEquippedTool: Tool? = nil
+local toolCustomPhysics: { Type: string, Speed: number?, Gravity: number? }? = nil
+
+local function InspectToolPhysics(tool: Instance): { Type: string, Speed: number?, Gravity: number? }
+    local projType = tool:GetAttribute("ProjectileType") or tool:GetAttribute("WeaponType")
+    local speed = tool:GetAttribute("ProjectileSpeed") or tool:GetAttribute("MuzzleVelocity") or tool:GetAttribute("Speed")
+    local grav = tool:GetAttribute("Gravity") or tool:GetAttribute("ProjectileGravity")
+
+    local toolNameLower = string.lower(tool.Name)
+    if not projType then
+        if string.find(toolNameLower, "bow") or string.find(toolNameLower, "arco")
+            or string.find(toolNameLower, "rocket") or string.find(toolNameLower, "grenade")
+            or string.find(toolNameLower, "cannon") or string.find(toolNameLower, "slingshot")
+            or string.find(toolNameLower, "physics") or string.find(toolNameLower, "ballistic") then
+            projType = "Physics"
+            speed = speed or 300
+            grav = grav or 196.2
+        elseif string.find(toolNameLower, "sniper") or string.find(toolNameLower, "rifle")
+            or string.find(toolNameLower, "pistol") or string.find(toolNameLower, "gun")
+            or string.find(toolNameLower, "laser") or string.find(toolNameLower, "raycast") then
+            projType = "Instant"
+        end
+    end
+    return {
+        Type = tostring(projType or "Instant"),
+        Speed = tonumber(speed),
+        Gravity = tonumber(grav)
+    }
+end
 
 local function HookCharacterTools(char: Instance?)
     if not char then return end
     local function HookTool(child: Instance)
         if child:IsA("Tool") then
+            currentEquippedTool = child
+            toolCustomPhysics = InspectToolPhysics(child)
+            DashboardGUI.AddDiagnosticLog("WEAPON", string.format("Arma equipada: '%s' | Modo: %s", child.Name, toolCustomPhysics.Type), "INFO")
+
             child.Activated:Connect(function()
                 triggerShotRequested = true
                 triggerSource = "Tool.Activated (" .. child.Name .. ")"
+            end)
+            child.Unequipped:Connect(function()
+                if currentEquippedTool == child then
+                    currentEquippedTool = nil
+                    toolCustomPhysics = nil
+                end
             end)
         end
     end
@@ -134,7 +173,11 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
     local targetPriority = tostring(SimConfig.Get("TargetPriority") or "Crosshair")
     local targetStickiness = tonumber(SimConfig.Get("TargetStickiness")) or 0.25
     local enableLead = SimConfig.Get("EnableLead") == true
-    local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+    local projSpeed = (toolCustomPhysics and toolCustomPhysics.Speed) or tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+    local projGravity = (toolCustomPhysics and toolCustomPhysics.Gravity) or tonumber(SimConfig.Get("ProjectileGravity")) or 196.2
+    local projType = (toolCustomPhysics and toolCustomPhysics.Type) or tostring(SimConfig.Get("ProjectileType") or "Instant")
+    local isPhysics = (projType == "Physics")
+    local dropComp = SimConfig.Get("ProjectileDropComp") ~= false
 
     -- ESTÁGIO 3: Seleção e Validação do Candidato
     local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
@@ -163,11 +206,14 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
         return false, "TARGET_OCCLUDED"
     end
 
-    -- Predição Balística (Lead)
+    -- Predição Balística (Lead com compensação gravitacional em caso de física)
     local aimPosition = targetPos
+    local bulletDropStuds = 0
     if enableLead then
         local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
-        aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+        local leadPos, flightTime, drop = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
+        aimPosition = leadPos
+        bulletDropStuds = drop
     end
 
     -- Validação do Cone Angular de Silent Aim
@@ -183,25 +229,29 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
         return false, "TARGET_OUTSIDE_FOV"
     end
 
-    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo
+    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo (com Trajetória Física ou Instantânea)
     local shotResult = Tracker:SimulateShot(
         camera.CFrame,
         aimPosition,
         silentAimFov,
         silentAimHitChance,
         isObstructed,
-        bestTarget
+        bestTarget,
+        projSpeed,
+        isPhysics and projGravity or 0,
+        isPhysics
     )
     Tracker.LastShotResult = shotResult
 
     if silentAimTracer and shotResult.Fired then
         local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-        Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25)
+        Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25, shotResult.TrajectoryPoints)
     end
 
     local resTag = shotResult.HitRegistered and "ACERTO" or "DISPERSÃO"
-    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Impacto calculado: %s em '%s' (Desvio: %.1f°).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
-    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] Impacto calculado: %s em '%s' (Desvio angular: %.1f°, Destino: %s).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, tostring(shotResult.TargetPosition)))
+    local trajDesc = isPhysics and string.format("Física (g=%.1f, t=%.2fs, queda=%.1f studs)", projGravity, shotResult.FlightTime, shotResult.BulletDropStuds) or "Instantâneo (Raycast)"
+    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("[%s] %s em '%s' (Desvio: %.1f°).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
+    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] [%s] %s em '%s' (Desvio: %.1f°, Voo: %.3fs, Queda: %.2f studs, Destino: %s).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, shotResult.FlightTime, shotResult.BulletDropStuds, tostring(shotResult.TargetPosition)))
 
     return true, resTag
 end
@@ -335,7 +385,11 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local visibleOnly = SimConfig.Get("VisibleOnly") == true
         local enableESP = SimConfig.Get("EnableESP") == true and SimConfig.Get("ShowSyntheticTargets") ~= false
         local enableLead = SimConfig.Get("EnableLead") == true
-        local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+        local projSpeed = (toolCustomPhysics and toolCustomPhysics.Speed) or tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+        local projGravity = (toolCustomPhysics and toolCustomPhysics.Gravity) or tonumber(SimConfig.Get("ProjectileGravity")) or 196.2
+        local projType = (toolCustomPhysics and toolCustomPhysics.Type) or tostring(SimConfig.Get("ProjectileType") or "Instant")
+        local isPhysics = (projType == "Physics")
+        local dropComp = SimConfig.Get("ProjectileDropComp") ~= false
         local smoothing = tonumber(SimConfig.Get("Smoothing")) or 0.15
         local accelExp = tonumber(SimConfig.Get("AccelerationCurve")) or 1.25
         local simulateJitter = SimConfig.Get("SimulateJitter") == true
@@ -407,11 +461,12 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 isTargetValid = false
             end
 
-            -- 3. Predição Balística (Lead)
+            -- 3. Predição Balística (Lead com suporte a física e gravidade)
             local aimPosition = targetPos
             if enableLead and isTargetValid then
                 local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
-                aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+                local leadPos = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
+                aimPosition = leadPos
             end
 
             -- 4. Realce Visual Dinâmico em Lote (ESP Chams com limpeza automática)
@@ -439,12 +494,15 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                                 silentAimFov,
                                 silentAimHitChance,
                                 isObstructed,
-                                bestTarget
+                                bestTarget,
+                                projSpeed,
+                                isPhysics and projGravity or 0,
+                                isPhysics
                             )
                             Tracker.LastShotResult = shotResult
                             if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                                 local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-                                Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
+                                Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22, shotResult.TrajectoryPoints)
                             end
                         end
                     end

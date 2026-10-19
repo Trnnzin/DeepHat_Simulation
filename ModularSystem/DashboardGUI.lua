@@ -1020,6 +1020,74 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     CreateToggleField(pageVision, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
     CreateToggleField(pageVision, "Ativar Predição Balística de Alvo (Lead Tracking)", "EnableLead", SimConfig.Get("EnableLead"))
     CreateSliderField(pageVision, "Velocidade Balística Simulada (studs/s)", "ProjectileSpeed", 300, 3000, SimConfig.Get("ProjectileSpeed"), 50)
+    CreateToggleField(pageVision, "Compensação de Queda por Gravidade (Bullet Drop)", "ProjectileDropComp", SimConfig.Get("ProjectileDropComp"))
+    CreateSliderField(pageVision, "Gravidade de Projétil Físico (studs/s²)", "ProjectileGravity", 0, 500, SimConfig.Get("ProjectileGravity"), 10)
+
+    -- Seletor de Tipo de Balística (Instantâneo vs Físico Parabólico)
+    local projTypeRow = Instance.new("Frame")
+    projTypeRow.Size = UDim2.new(1, 0, 0, 36)
+    projTypeRow.BackgroundColor3 = THEME.BG_INPUT
+    projTypeRow.BackgroundTransparency = 0.5
+    projTypeRow.Parent = pageVision
+    AddCorner(projTypeRow, 6)
+    AddStroke(projTypeRow, THEME.BORDER, 1)
+
+    local projTypeLbl = Instance.new("TextLabel")
+    projTypeLbl.Size = UDim2.new(0, 110, 1, 0)
+    projTypeLbl.Position = UDim2.new(0, 10, 0, 0)
+    projTypeLbl.BackgroundTransparency = 1
+    projTypeLbl.Font = Enum.Font.GothamMedium
+    projTypeLbl.TextSize = 11
+    projTypeLbl.TextColor3 = THEME.TEXT_MAIN
+    projTypeLbl.TextXAlignment = Enum.TextXAlignment.Left
+    projTypeLbl.Text = "Tipo de Arma:"
+    projTypeLbl.Parent = projTypeRow
+
+    local projButtons: { [string]: TextButton } = {}
+    local projOptions = {
+        { Id = "Instant", Label = "Instantâneo (Raycast)" },
+        { Id = "Physics", Label = "Físico (Gravidade/Arco)" },
+    }
+
+    local function UpdateProjTypeUI(activeId: string)
+        for id, btn in pairs(projButtons) do
+            local isSel = (id == activeId)
+            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        end
+    end
+
+    local projGrid = Instance.new("Frame")
+    projGrid.Size = UDim2.new(1, -125, 0, 24)
+    projGrid.Position = UDim2.new(0, 115, 0.5, -12)
+    projGrid.BackgroundTransparency = 1
+    projGrid.Parent = projTypeRow
+
+    local projLayout = Instance.new("UIGridLayout")
+    projLayout.CellSize = UDim2.new(0.48, 0, 1, 0)
+    projLayout.CellPadding = UDim2.new(0.04, 0, 0, 0)
+    projLayout.Parent = projGrid
+
+    for _, opt in ipairs(projOptions) do
+        local prBtn = Instance.new("TextButton")
+        local isCurrent = (SimConfig.Get("ProjectileType") or "Instant") == opt.Id
+        prBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
+        prBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        prBtn.Font = Enum.Font.GothamBold
+        prBtn.TextSize = 10
+        prBtn.Text = opt.Label
+        prBtn.Parent = projGrid
+        AddCorner(prBtn, 4)
+        AddStroke(prBtn, THEME.BORDER, 1)
+        projButtons[opt.Id] = prBtn
+
+        prBtn.MouseButton1Click:Connect(function()
+            SimConfig.Set("ProjectileType", opt.Id)
+            UpdateProjTypeUI(opt.Id)
+            DashboardGUI.AddDiagnosticLog("BALLISTICS", "Modelo balístico alterado para: " .. opt.Label, "INFO")
+        end)
+    end
+
 
     -- Seção de Silent Aim
     local silentHeader = Instance.new("TextLabel")

@@ -91,6 +91,9 @@ do
         ShowFovCircle: boolean,     -- Overlay circular do FOV na tela
         EnableLead: boolean,        -- Predicao balistica (Lead Calculation)
         ProjectileSpeed: number,    -- Velocidade do projetil para calculo de lead (studs/s)
+        ProjectileType: string,     -- "Physics" (balística com gravidade) ou "Raycast" (instantâneo)
+        ProjectileGravity: number,  -- Aceleração da gravidade balística (studs/s²) [0 - 500]
+        ProjectileDropComp: boolean,-- Compensação automática da curvatura/queda balística
         TeamCheck: boolean,         -- Ignorar companheiros de equipe
         WallOcclusionCheck: boolean,-- Verificacao de oclusao por Raycast
 
@@ -140,6 +143,9 @@ do
             ShowFovCircle = true,
             EnableLead = true,
             ProjectileSpeed = 900.0,
+            ProjectileType = "Physics",
+            ProjectileGravity = 196.2,
+            ProjectileDropComp = true,
             TeamCheck = false,
             WallOcclusionCheck = true,
             TargetRegion = "Head",
@@ -181,6 +187,9 @@ do
             ShowFovCircle = true,
             EnableLead = false,
             ProjectileSpeed = 800.0,
+            ProjectileType = "Physics",
+            ProjectileGravity = 196.2,
+            ProjectileDropComp = true,
             TeamCheck = true,
             WallOcclusionCheck = true,
             TargetRegion = "Torso",
@@ -222,6 +231,9 @@ do
             ShowFovCircle = true,
             EnableLead = true,
             ProjectileSpeed = 1000.0,
+            ProjectileType = "Physics",
+            ProjectileGravity = 196.2,
+            ProjectileDropComp = true,
             TeamCheck = false,
             WallOcclusionCheck = true,
             TargetRegion = "Head",
@@ -263,6 +275,9 @@ do
             ShowFovCircle = true,
             EnableLead = true,
             ProjectileSpeed = 1200.0,
+            ProjectileType = "Physics",
+            ProjectileGravity = 196.2,
+            ProjectileDropComp = true,
             TeamCheck = false,
             WallOcclusionCheck = true,
             TargetRegion = "Head",
@@ -304,6 +319,9 @@ do
             ShowFovCircle = true,
             EnableLead = true,
             ProjectileSpeed = 900.0,
+            ProjectileType = "Physics",
+            ProjectileGravity = 196.2,
+            ProjectileDropComp = true,
             TeamCheck = false,
             WallOcclusionCheck = true,
             TargetRegion = "Head",
@@ -352,6 +370,9 @@ do
         SidebarEnabled = true,
         PersistenceEnabled = true,
         AllowPlayerTargets = true,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         ConfigVersion = CONFIG_VERSION,
     }
     for k, v in pairs(DEFAULT_OVERRIDES) do DEFAULT_PROFILE[k] = v end
@@ -373,6 +394,9 @@ do
         SimulatedAgents = { t = "number", min = 1, max = 16 },
         VisibleOnly = { t = "boolean" }, EnableESP = { t = "boolean" }, ShowFovCircle = { t = "boolean" },
         EnableLead = { t = "boolean" }, ProjectileSpeed = { t = "number", min = 10, max = 5000 },
+        ProjectileType = { t = "string", enum = { "Physics", "Raycast" } },
+        ProjectileGravity = { t = "number", min = 0, max = 500 },
+        ProjectileDropComp = { t = "boolean" },
         TeamCheck = { t = "boolean" }, WallOcclusionCheck = { t = "boolean" },
         TargetRegion = { t = "string", enum = { "Head", "Torso", "Arms", "Legs" } },
         TargetBone = { t = "string" },
@@ -819,8 +843,8 @@ do
 
     -- Validação de Integridade (Type Guarding Rigoroso)
     function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): boolean
-        -- Type Guarding: BasePart ou Model válido no DataModel
-        if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(game) then
+        -- Type Guarding: BasePart ou Model válido e fisicamente presente no Workspace
+        if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(Workspace) then
             return false
         end
 
@@ -860,19 +884,24 @@ do
             end
         end
 
-        -- Se o modelo possuir um Humanoid, respeita a integridade de vida
+        -- Se for personagem de jogador ou modelo com Humanoid, respeita a integridade de vida e existência
         local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
-        if hum and hum.Health <= 0 then
+        if hum then
+            if hum.Health <= 0 then
+                return false
+            end
+        elseif targetPlayer ~= nil then
+            -- Personagem de jogador real SEM Humanoid é considerado morto ou em carregamento incompleto
             return false
         end
 
-        -- Modelos devem conter partes físicas válidas para serem alvos sintéticos
+        -- Modelos devem conter partes físicas válidas presentes no Workspace
         if objeto:IsA("Model") then
-            local hasPart = objeto.PrimaryPart
+            local primaryPart = objeto.PrimaryPart
                 or objeto:FindFirstChild("HumanoidRootPart", true)
                 or objeto:FindFirstChild("Head", true)
                 or objeto:FindFirstChildWhichIsA("BasePart", true)
-            if not hasPart then
+            if not primaryPart or not primaryPart:IsDescendantOf(Workspace) then
                 return false
             end
         end
@@ -1074,7 +1103,13 @@ do
 
         local mode = priorityMode or "Crosshair"
         local now = os.clock()
-        local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
+
+        -- Invalidação imediata do alvo travado se ele morreu, perdeu o Humanoid ou saiu do Workspace
+        if self.LockedTarget ~= nil and not self:IsValidTarget(self.LockedTarget, teamCheck) then
+            self.LockedTarget = nil
+            self.LockExpiry = 0
+        end
+        local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry)
         local fovRadiusLimit = (maxFovDeg / 2.0) -- Raio angular relativo ao retículo da tela
 
         for _, obj in ipairs(candidates) do
@@ -1129,11 +1164,12 @@ do
             end
         end
 
-        if bestTarget then
+        if bestTarget and self:IsValidTarget(bestTarget, teamCheck) then
             self.LockedTarget = bestTarget
             self.LockExpiry = now + (stickinessDuration or 0.25)
         else
             self.LockedTarget = nil
+            self.LockExpiry = 0
         end
 
         return bestTarget, bestPos, finalDist, finalAngle, finalLabel, finalHealth
@@ -1242,8 +1278,17 @@ do
             or not IsFiniteVec(originPos) or not IsFiniteVec(targetPos) then
             return { Status = "INVALID", Reason = "Posição não finita ou ausente", QueryDistance = 0 }
         end
-        if targetInstance ~= nil and (targetInstance.Parent == nil or not targetInstance:IsDescendantOf(game)) then
-            return { Status = "INVALID", Reason = "Destino removido da árvore", QueryDistance = 0 }
+        if targetInstance ~= nil then
+            if targetInstance.Parent == nil or not targetInstance:IsDescendantOf(Workspace) then
+                return { Status = "INVALID", Reason = "Destino removido do Workspace", QueryDistance = 0 }
+            end
+            local charModel = targetInstance:IsA("Model") and targetInstance or targetInstance:FindFirstAncestorOfClass("Model")
+            if charModel then
+                local hum = charModel:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health <= 0 then
+                    return { Status = "INVALID", Reason = "Alvo com Humanoid sem vida (morto)", QueryDistance = 0 }
+                end
+            end
         end
 
         local displacement = targetPos - originPos
@@ -1309,14 +1354,24 @@ do
     end
 
     function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
+        -- Leitura direta de velocidade física AssemblyLinearVelocity do Roblox (se disponível)
+        if inst:IsA("BasePart") then
+            local alv = (inst :: BasePart).AssemblyLinearVelocity
+            if alv and IsFiniteVec(alv) and alv.Magnitude > 0.05 then
+                return alv
+            end
+        end
+
         local now = os.clock()
         local cached = self.VelocityCache[inst]
         local vel = Vector3.zero
 
         if cached then
             local dt = (now - cached.time)
-            if dt > 0.001 and dt < 0.3 then
+            if dt > 0.001 and dt < 0.35 then
                 vel = (currentPos - cached.pos) / dt
+            elseif dt >= 0.35 then
+                vel = Vector3.zero
             else
                 vel = cached.vel
             end
@@ -1326,13 +1381,37 @@ do
         return vel
     end
 
-    function VectorTracker:ComputeLead(targetPos: Vector3, targetVel: Vector3, eyePos: Vector3, projSpeed: number, enabled: boolean): Vector3
+    function VectorTracker:ComputeLead(
+        targetPos: Vector3,
+        targetVel: Vector3,
+        eyePos: Vector3,
+        projSpeed: number,
+        enabled: boolean,
+        gravity: number?,
+        dropComp: boolean?
+    ): (Vector3, number, number)
         if not enabled or projSpeed <= 0 then
-            return targetPos
+            return targetPos, 0, 0
         end
         local dist = (targetPos - eyePos).Magnitude
         local timeToHit = dist / projSpeed
-        return targetPos + (targetVel * timeToHit)
+        local leadPos = targetPos + (targetVel * timeToHit)
+        local dropStuds = 0
+
+        local g = (type(gravity) == "number" and gravity >= 0) and gravity or 0
+        if dropComp == true and g > 0 then
+            -- Balística com gravidade: Delta_y = 0.5 * g * t^2
+            -- 2 iterações para convergência de tempo de voo com elevação
+            dropStuds = 0.5 * g * (timeToHit * timeToHit)
+            local compensatedPos = leadPos + Vector3.new(0, dropStuds, 0)
+            local dist2 = (compensatedPos - eyePos).Magnitude
+            local timeToHit2 = dist2 / projSpeed
+            dropStuds = 0.5 * g * (timeToHit2 * timeToHit2)
+            leadPos = targetPos + (targetVel * timeToHit2) + Vector3.new(0, dropStuds, 0)
+            timeToHit = timeToHit2
+        end
+
+        return leadPos, timeToHit, dropStuds
     end
 
     -- Cálculo de Rotação Suavizada com Curva Intuitiva e Limite de Velocidade Angular
@@ -1420,10 +1499,10 @@ do
 
         local smoothedCFrame = CFrame.new(originPos) * CFrame.fromEulerAnglesYXZ(nextPitch, nextYaw, 0)
 
-        -- Injeção de Jitter Perlin Noise caso habilitado
-        if simulateJitter and intensity and intensity > 0 then
+        -- Injeção de Jitter Perlin Noise com deadband de estabilidade (não treme se já estiver alinhado < 0.35°)
+        if simulateJitter and intensity and intensity > 0 and angularErrorDeg >= 0.35 then
             local now = os.clock()
-            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.15
+            local jitterFactor = (intensity / 100.0) * math.clamp((angularErrorDeg - 0.35) / 15.0, 0.0, 1.0) * 0.15
             if jitterFactor > 0.005 then
                 local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
                 local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -1509,7 +1588,11 @@ do
         TargetPosition: Vector3,
         ShotDirection: Vector3,
         InFov: boolean,
-        IsObstructed: boolean
+        IsObstructed: boolean,
+        FlightTime: number,
+        BulletDropStuds: number,
+        TrajectoryPoints: { Vector3 }?,
+        TrajectoryType: string -- "Instant" | "Physics"
     }
 
     -- Execução de Disparo Simulado Controlado (Disparado apenas por evento/trigger de tiro)
@@ -1519,11 +1602,20 @@ do
         maxFovDeg: number,
         hitChancePercent: number,
         isObstructed: boolean?,
-        targetInstance: Instance?
+        targetInstance: Instance?,
+        projectileSpeed: number?,
+        gravity: number?,
+        isPhysics: boolean?
     ): ShotSimulationResult
         local muzzlePos = cameraCFrame.Position + cameraCFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
         local displacement = (targetPosition - muzzlePos)
         local dist = displacement.Magnitude
+
+        local isPhys = (isPhysics == true)
+        local g = (isPhys and type(gravity) == "number" and gravity >= 0) and gravity or 0
+        local speed = (type(projectileSpeed) == "number" and projectileSpeed > 0) and projectileSpeed or 2500
+        local flightTime = dist / speed
+        local bulletDropStuds = (g > 0) and (0.5 * g * flightTime * flightTime) or 0
 
         if dist < EPSILON then
             return {
@@ -1534,7 +1626,11 @@ do
                 TargetPosition = targetPosition,
                 ShotDirection = cameraCFrame.LookVector,
                 InFov = false,
-                IsObstructed = isObstructed == true
+                IsObstructed = isObstructed == true,
+                FlightTime = 0,
+                BulletDropStuds = 0,
+                TrajectoryPoints = nil,
+                TrajectoryType = isPhys and "Physics" or "Instant"
             }
         end
 
@@ -1562,6 +1658,20 @@ do
 
         local endPosition = hit and targetPosition or (muzzlePos + shotDir * dist)
 
+        -- Geração de trajetória: reta para instantânea, arco parabólico segmentado para física
+        local trajectoryPoints: { Vector3 }? = nil
+        if isPhys and g > 0 and dist > 1.0 then
+            trajectoryPoints = {}
+            local steps = 10
+            -- V_launch calculado para que no instante flightTime o projétil atinja endPosition sob gravidade
+            local vLaunch = (endPosition - muzzlePos + Vector3.new(0, 0.5 * g * flightTime * flightTime, 0)) / math.max(flightTime, 0.001)
+            for i = 0, steps do
+                local t = (i / steps) * flightTime
+                local pt = muzzlePos + (vLaunch * t) - Vector3.new(0, 0.5 * g * t * t, 0)
+                table.insert(trajectoryPoints, pt)
+            end
+        end
+
         return {
             Fired = true,
             HitRegistered = hit,
@@ -1570,12 +1680,16 @@ do
             TargetPosition = endPosition,
             ShotDirection = shotDir,
             InFov = inFov,
-            IsObstructed = isObstructed == true
+            IsObstructed = isObstructed == true,
+            FlightTime = flightTime,
+            BulletDropStuds = bulletDropStuds,
+            TrajectoryPoints = trajectoryPoints,
+            TrajectoryType = isPhys and "Physics" or "Instant"
         }
     end
 
-    -- Visualizador de Traçador (Tracer 3D Neon com Limpeza de Debris)
-    function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
+    -- Visualizador de Traçador (Tracer 3D Neon com Limpeza de Debris e Suporte a Arcos Parabólicos)
+    function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?, trajectoryPoints: { Vector3 }?)
         local ok, _ = pcall(function()
             local dist = (targetPos - origin).Magnitude
             if dist < 0.1 then return end
@@ -1591,22 +1705,48 @@ do
             local tracerColor = color or Color3.fromRGB(255, 45, 60)
             local life = duration or 0.22
 
-            -- 1. Feixe de Traçador (Cilindro/Viga Neon)
-            local part = Instance.new("Part")
-            part.Name = "DeepHat_SilentAimTracer"
-            part.Anchored = true
-            part.CanCollide = false
-            part.CanTouch = false
-            part.CanQuery = false
-            part.Material = Enum.Material.Neon
-            part.Color = tracerColor
-            part.Transparency = 0.10
-            part.Size = Vector3.new(0.16, 0.16, dist)
-            part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
-            part.Parent = container
-            Debris:AddItem(part, life)
+            -- Renderização da trajetória
+            if trajectoryPoints and #trajectoryPoints >= 2 then
+                -- Segmentos parabólicos para projéteis físicos (fidelidade balística real)
+                for i = 1, #trajectoryPoints - 1 do
+                    local pA = trajectoryPoints[i]
+                    local pB = trajectoryPoints[i + 1]
+                    local segDisp = pB - pA
+                    local segDist = segDisp.Magnitude
+                    if segDist > 0.05 then
+                        local seg = Instance.new("Part")
+                        seg.Name = "DeepHat_BallisticTracerSegment"
+                        seg.Anchored = true
+                        seg.CanCollide = false
+                        seg.CanTouch = false
+                        seg.CanQuery = false
+                        seg.Material = Enum.Material.Neon
+                        seg.Color = tracerColor
+                        seg.Transparency = 0.12
+                        seg.Size = Vector3.new(0.14, 0.14, segDist)
+                        seg.CFrame = CFrame.lookAt(pA, pB) * CFrame.new(0, 0, -segDist / 2)
+                        seg.Parent = container
+                        Debris:AddItem(seg, life)
+                    end
+                end
+            else
+                -- Feixe de traçador retilíneo (Raycast instantâneo)
+                local part = Instance.new("Part")
+                part.Name = "DeepHat_SilentAimTracer"
+                part.Anchored = true
+                part.CanCollide = false
+                part.CanTouch = false
+                part.CanQuery = false
+                part.Material = Enum.Material.Neon
+                part.Color = tracerColor
+                part.Transparency = 0.10
+                part.Size = Vector3.new(0.16, 0.16, dist)
+                part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
+                part.Parent = container
+                Debris:AddItem(part, life)
+            end
 
-            -- 2. Marcador de Impacto no Ponto de Destino
+            -- Marcador de Impacto no Ponto de Destino
             local impact = Instance.new("Part")
             impact.Name = "DeepHat_ImpactMarker"
             impact.Shape = Enum.PartType.Ball
@@ -3010,6 +3150,74 @@ do
         CreateToggleField(pageVision, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
         CreateToggleField(pageVision, "Ativar Predição Balística de Alvo (Lead Tracking)", "EnableLead", SimConfig.Get("EnableLead"))
         CreateSliderField(pageVision, "Velocidade Balística Simulada (studs/s)", "ProjectileSpeed", 300, 3000, SimConfig.Get("ProjectileSpeed"), 50)
+        CreateToggleField(pageVision, "Compensação de Queda por Gravidade (Bullet Drop)", "ProjectileDropComp", SimConfig.Get("ProjectileDropComp"))
+        CreateSliderField(pageVision, "Gravidade de Projétil Físico (studs/s²)", "ProjectileGravity", 0, 500, SimConfig.Get("ProjectileGravity"), 10)
+
+        -- Seletor de Tipo de Balística (Instantâneo vs Físico Parabólico)
+        local projTypeRow = Instance.new("Frame")
+        projTypeRow.Size = UDim2.new(1, 0, 0, 36)
+        projTypeRow.BackgroundColor3 = THEME.BG_INPUT
+        projTypeRow.BackgroundTransparency = 0.5
+        projTypeRow.Parent = pageVision
+        AddCorner(projTypeRow, 6)
+        AddStroke(projTypeRow, THEME.BORDER, 1)
+
+        local projTypeLbl = Instance.new("TextLabel")
+        projTypeLbl.Size = UDim2.new(0, 110, 1, 0)
+        projTypeLbl.Position = UDim2.new(0, 10, 0, 0)
+        projTypeLbl.BackgroundTransparency = 1
+        projTypeLbl.Font = Enum.Font.GothamMedium
+        projTypeLbl.TextSize = 11
+        projTypeLbl.TextColor3 = THEME.TEXT_MAIN
+        projTypeLbl.TextXAlignment = Enum.TextXAlignment.Left
+        projTypeLbl.Text = "Tipo de Arma:"
+        projTypeLbl.Parent = projTypeRow
+
+        local projButtons: { [string]: TextButton } = {}
+        local projOptions = {
+            { Id = "Instant", Label = "Instantâneo (Raycast)" },
+            { Id = "Physics", Label = "Físico (Gravidade/Arco)" },
+        }
+
+        local function UpdateProjTypeUI(activeId: string)
+            for id, btn in pairs(projButtons) do
+                local isSel = (id == activeId)
+                btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+                btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            end
+        end
+
+        local projGrid = Instance.new("Frame")
+        projGrid.Size = UDim2.new(1, -125, 0, 24)
+        projGrid.Position = UDim2.new(0, 115, 0.5, -12)
+        projGrid.BackgroundTransparency = 1
+        projGrid.Parent = projTypeRow
+
+        local projLayout = Instance.new("UIGridLayout")
+        projLayout.CellSize = UDim2.new(0.48, 0, 1, 0)
+        projLayout.CellPadding = UDim2.new(0.04, 0, 0, 0)
+        projLayout.Parent = projGrid
+
+        for _, opt in ipairs(projOptions) do
+            local prBtn = Instance.new("TextButton")
+            local isCurrent = (SimConfig.Get("ProjectileType") or "Instant") == opt.Id
+            prBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
+            prBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            prBtn.Font = Enum.Font.GothamBold
+            prBtn.TextSize = 10
+            prBtn.Text = opt.Label
+            prBtn.Parent = projGrid
+            AddCorner(prBtn, 4)
+            AddStroke(prBtn, THEME.BORDER, 1)
+            projButtons[opt.Id] = prBtn
+
+            prBtn.MouseButton1Click:Connect(function()
+                SimConfig.Set("ProjectileType", opt.Id)
+                UpdateProjTypeUI(opt.Id)
+                DashboardGUI.AddDiagnosticLog("BALLISTICS", "Modelo balístico alterado para: " .. opt.Label, "INFO")
+            end)
+        end
+
 
         -- Seção de Silent Aim
         local silentHeader = Instance.new("TextLabel")
@@ -3862,14 +4070,53 @@ local Renderer = VisualOverlayRenderer.new()
 local triggerShotRequested = false
 local triggerSource = "Nenhum"
 local lastSilentAimLogTime = 0
+local currentEquippedTool: Tool? = nil
+local toolCustomPhysics: { Type: string, Speed: number?, Gravity: number? }? = nil
+
+local function InspectToolPhysics(tool: Instance): { Type: string, Speed: number?, Gravity: number? }
+    local projType = tool:GetAttribute("ProjectileType") or tool:GetAttribute("WeaponType")
+    local speed = tool:GetAttribute("ProjectileSpeed") or tool:GetAttribute("MuzzleVelocity") or tool:GetAttribute("Speed")
+    local grav = tool:GetAttribute("Gravity") or tool:GetAttribute("ProjectileGravity")
+
+    local toolNameLower = string.lower(tool.Name)
+    if not projType then
+        if string.find(toolNameLower, "bow") or string.find(toolNameLower, "arco")
+            or string.find(toolNameLower, "rocket") or string.find(toolNameLower, "grenade")
+            or string.find(toolNameLower, "cannon") or string.find(toolNameLower, "slingshot")
+            or string.find(toolNameLower, "physics") or string.find(toolNameLower, "ballistic") then
+            projType = "Physics"
+            speed = speed or 300
+            grav = grav or 196.2
+        elseif string.find(toolNameLower, "sniper") or string.find(toolNameLower, "rifle")
+            or string.find(toolNameLower, "pistol") or string.find(toolNameLower, "gun")
+            or string.find(toolNameLower, "laser") or string.find(toolNameLower, "raycast") then
+            projType = "Instant"
+        end
+    end
+    return {
+        Type = tostring(projType or "Instant"),
+        Speed = tonumber(speed),
+        Gravity = tonumber(grav)
+    }
+end
 
 local function HookCharacterTools(char: Instance?)
     if not char then return end
     local function HookTool(child: Instance)
         if child:IsA("Tool") then
+            currentEquippedTool = child
+            toolCustomPhysics = InspectToolPhysics(child)
+            DashboardGUI.AddDiagnosticLog("WEAPON", string.format("Arma equipada: '%s' | Modo: %s", child.Name, toolCustomPhysics.Type), "INFO")
+
             child.Activated:Connect(function()
                 triggerShotRequested = true
                 triggerSource = "Tool.Activated (" .. child.Name .. ")"
+            end)
+            child.Unequipped:Connect(function()
+                if currentEquippedTool == child then
+                    currentEquippedTool = nil
+                    toolCustomPhysics = nil
+                end
             end)
         end
     end
@@ -3924,7 +4171,11 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
     local targetPriority = tostring(SimConfig.Get("TargetPriority") or "Crosshair")
     local targetStickiness = tonumber(SimConfig.Get("TargetStickiness")) or 0.25
     local enableLead = SimConfig.Get("EnableLead") == true
-    local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+    local projSpeed = (toolCustomPhysics and toolCustomPhysics.Speed) or tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+    local projGravity = (toolCustomPhysics and toolCustomPhysics.Gravity) or tonumber(SimConfig.Get("ProjectileGravity")) or 196.2
+    local projType = (toolCustomPhysics and toolCustomPhysics.Type) or tostring(SimConfig.Get("ProjectileType") or "Instant")
+    local isPhysics = (projType == "Physics")
+    local dropComp = SimConfig.Get("ProjectileDropComp") ~= false
 
     -- ESTÁGIO 3: Seleção e Validação do Candidato
     local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
@@ -3953,11 +4204,14 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
         return false, "TARGET_OCCLUDED"
     end
 
-    -- Predição Balística (Lead)
+    -- Predição Balística (Lead com compensação gravitacional em caso de física)
     local aimPosition = targetPos
+    local bulletDropStuds = 0
     if enableLead then
         local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
-        aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+        local leadPos, flightTime, drop = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
+        aimPosition = leadPos
+        bulletDropStuds = drop
     end
 
     -- Validação do Cone Angular de Silent Aim
@@ -3973,25 +4227,29 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
         return false, "TARGET_OUTSIDE_FOV"
     end
 
-    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo
+    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo (com Trajetória Física ou Instantânea)
     local shotResult = Tracker:SimulateShot(
         camera.CFrame,
         aimPosition,
         silentAimFov,
         silentAimHitChance,
         isObstructed,
-        bestTarget
+        bestTarget,
+        projSpeed,
+        isPhysics and projGravity or 0,
+        isPhysics
     )
     Tracker.LastShotResult = shotResult
 
     if silentAimTracer and shotResult.Fired then
         local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-        Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25)
+        Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25, shotResult.TrajectoryPoints)
     end
 
     local resTag = shotResult.HitRegistered and "ACERTO" or "DISPERSÃO"
-    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Impacto calculado: %s em '%s' (Desvio: %.1f°).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
-    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] Impacto calculado: %s em '%s' (Desvio angular: %.1f°, Destino: %s).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, tostring(shotResult.TargetPosition)))
+    local trajDesc = isPhysics and string.format("Física (g=%.1f, t=%.2fs, queda=%.1f studs)", projGravity, shotResult.FlightTime, shotResult.BulletDropStuds) or "Instantâneo (Raycast)"
+    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("[%s] %s em '%s' (Desvio: %.1f°).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
+    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] [%s] %s em '%s' (Desvio: %.1f°, Voo: %.3fs, Queda: %.2f studs, Destino: %s).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, shotResult.FlightTime, shotResult.BulletDropStuds, tostring(shotResult.TargetPosition)))
 
     return true, resTag
 end
@@ -4125,7 +4383,11 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local visibleOnly = SimConfig.Get("VisibleOnly") == true
         local enableESP = SimConfig.Get("EnableESP") == true and SimConfig.Get("ShowSyntheticTargets") ~= false
         local enableLead = SimConfig.Get("EnableLead") == true
-        local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+        local projSpeed = (toolCustomPhysics and toolCustomPhysics.Speed) or tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+        local projGravity = (toolCustomPhysics and toolCustomPhysics.Gravity) or tonumber(SimConfig.Get("ProjectileGravity")) or 196.2
+        local projType = (toolCustomPhysics and toolCustomPhysics.Type) or tostring(SimConfig.Get("ProjectileType") or "Instant")
+        local isPhysics = (projType == "Physics")
+        local dropComp = SimConfig.Get("ProjectileDropComp") ~= false
         local smoothing = tonumber(SimConfig.Get("Smoothing")) or 0.15
         local accelExp = tonumber(SimConfig.Get("AccelerationCurve")) or 1.25
         local simulateJitter = SimConfig.Get("SimulateJitter") == true
@@ -4197,11 +4459,12 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 isTargetValid = false
             end
 
-            -- 3. Predição Balística (Lead)
+            -- 3. Predição Balística (Lead com suporte a física e gravidade)
             local aimPosition = targetPos
             if enableLead and isTargetValid then
                 local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
-                aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+                local leadPos = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
+                aimPosition = leadPos
             end
 
             -- 4. Realce Visual Dinâmico em Lote (ESP Chams com limpeza automática)
@@ -4229,12 +4492,15 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                                 silentAimFov,
                                 silentAimHitChance,
                                 isObstructed,
-                                bestTarget
+                                bestTarget,
+                                projSpeed,
+                                isPhysics and projGravity or 0,
+                                isPhysics
                             )
                             Tracker.LastShotResult = shotResult
                             if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                                 local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-                                Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
+                                Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22, shotResult.TrajectoryPoints)
                             end
                         end
                     end

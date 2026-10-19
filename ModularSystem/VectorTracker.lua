@@ -97,8 +97,17 @@ function VectorTracker:EvaluateLineOfSight(originPos: Vector3, targetPos: Vector
         or not IsFiniteVec(originPos) or not IsFiniteVec(targetPos) then
         return { Status = "INVALID", Reason = "Posição não finita ou ausente", QueryDistance = 0 }
     end
-    if targetInstance ~= nil and (targetInstance.Parent == nil or not targetInstance:IsDescendantOf(game)) then
-        return { Status = "INVALID", Reason = "Destino removido da árvore", QueryDistance = 0 }
+    if targetInstance ~= nil then
+        if targetInstance.Parent == nil or not targetInstance:IsDescendantOf(Workspace) then
+            return { Status = "INVALID", Reason = "Destino removido do Workspace", QueryDistance = 0 }
+        end
+        local charModel = targetInstance:IsA("Model") and targetInstance or targetInstance:FindFirstAncestorOfClass("Model")
+        if charModel then
+            local hum = charModel:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then
+                return { Status = "INVALID", Reason = "Alvo com Humanoid sem vida (morto)", QueryDistance = 0 }
+            end
+        end
     end
 
     local displacement = targetPos - originPos
@@ -164,14 +173,24 @@ function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, 
 end
 
 function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
+    -- Leitura direta de velocidade física AssemblyLinearVelocity do Roblox (se disponível)
+    if inst:IsA("BasePart") then
+        local alv = (inst :: BasePart).AssemblyLinearVelocity
+        if alv and IsFiniteVec(alv) and alv.Magnitude > 0.05 then
+            return alv
+        end
+    end
+
     local now = os.clock()
     local cached = self.VelocityCache[inst]
     local vel = Vector3.zero
 
     if cached then
         local dt = (now - cached.time)
-        if dt > 0.001 and dt < 0.3 then
+        if dt > 0.001 and dt < 0.35 then
             vel = (currentPos - cached.pos) / dt
+        elseif dt >= 0.35 then
+            vel = Vector3.zero
         else
             vel = cached.vel
         end
@@ -181,13 +200,37 @@ function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Ve
     return vel
 end
 
-function VectorTracker:ComputeLead(targetPos: Vector3, targetVel: Vector3, eyePos: Vector3, projSpeed: number, enabled: boolean): Vector3
+function VectorTracker:ComputeLead(
+    targetPos: Vector3,
+    targetVel: Vector3,
+    eyePos: Vector3,
+    projSpeed: number,
+    enabled: boolean,
+    gravity: number?,
+    dropComp: boolean?
+): (Vector3, number, number)
     if not enabled or projSpeed <= 0 then
-        return targetPos
+        return targetPos, 0, 0
     end
     local dist = (targetPos - eyePos).Magnitude
     local timeToHit = dist / projSpeed
-    return targetPos + (targetVel * timeToHit)
+    local leadPos = targetPos + (targetVel * timeToHit)
+    local dropStuds = 0
+
+    local g = (type(gravity) == "number" and gravity >= 0) and gravity or 0
+    if dropComp == true and g > 0 then
+        -- Balística com gravidade: Delta_y = 0.5 * g * t^2
+        -- 2 iterações para convergência de tempo de voo com elevação
+        dropStuds = 0.5 * g * (timeToHit * timeToHit)
+        local compensatedPos = leadPos + Vector3.new(0, dropStuds, 0)
+        local dist2 = (compensatedPos - eyePos).Magnitude
+        local timeToHit2 = dist2 / projSpeed
+        dropStuds = 0.5 * g * (timeToHit2 * timeToHit2)
+        leadPos = targetPos + (targetVel * timeToHit2) + Vector3.new(0, dropStuds, 0)
+        timeToHit = timeToHit2
+    end
+
+    return leadPos, timeToHit, dropStuds
 end
 
 -- Cálculo de Rotação Suavizada com Curva Intuitiva e Limite de Velocidade Angular
@@ -275,10 +318,10 @@ function VectorTracker:ComputeSmoothRotation(
 
     local smoothedCFrame = CFrame.new(originPos) * CFrame.fromEulerAnglesYXZ(nextPitch, nextYaw, 0)
 
-    -- Injeção de Jitter Perlin Noise caso habilitado
-    if simulateJitter and intensity and intensity > 0 then
+    -- Injeção de Jitter Perlin Noise com deadband de estabilidade (não treme se já estiver alinhado < 0.35°)
+    if simulateJitter and intensity and intensity > 0 and angularErrorDeg >= 0.35 then
         local now = os.clock()
-        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.15
+        local jitterFactor = (intensity / 100.0) * math.clamp((angularErrorDeg - 0.35) / 15.0, 0.0, 1.0) * 0.15
         if jitterFactor > 0.005 then
             local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
             local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -364,7 +407,11 @@ export type ShotSimulationResult = {
     TargetPosition: Vector3,
     ShotDirection: Vector3,
     InFov: boolean,
-    IsObstructed: boolean
+    IsObstructed: boolean,
+    FlightTime: number,
+    BulletDropStuds: number,
+    TrajectoryPoints: { Vector3 }?,
+    TrajectoryType: string -- "Instant" | "Physics"
 }
 
 -- Execução de Disparo Simulado Controlado (Disparado apenas por evento/trigger de tiro)
@@ -374,11 +421,20 @@ function VectorTracker:SimulateShot(
     maxFovDeg: number,
     hitChancePercent: number,
     isObstructed: boolean?,
-    targetInstance: Instance?
+    targetInstance: Instance?,
+    projectileSpeed: number?,
+    gravity: number?,
+    isPhysics: boolean?
 ): ShotSimulationResult
     local muzzlePos = cameraCFrame.Position + cameraCFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
     local displacement = (targetPosition - muzzlePos)
     local dist = displacement.Magnitude
+
+    local isPhys = (isPhysics == true)
+    local g = (isPhys and type(gravity) == "number" and gravity >= 0) and gravity or 0
+    local speed = (type(projectileSpeed) == "number" and projectileSpeed > 0) and projectileSpeed or 2500
+    local flightTime = dist / speed
+    local bulletDropStuds = (g > 0) and (0.5 * g * flightTime * flightTime) or 0
 
     if dist < EPSILON then
         return {
@@ -389,7 +445,11 @@ function VectorTracker:SimulateShot(
             TargetPosition = targetPosition,
             ShotDirection = cameraCFrame.LookVector,
             InFov = false,
-            IsObstructed = isObstructed == true
+            IsObstructed = isObstructed == true,
+            FlightTime = 0,
+            BulletDropStuds = 0,
+            TrajectoryPoints = nil,
+            TrajectoryType = isPhys and "Physics" or "Instant"
         }
     end
 
@@ -417,6 +477,20 @@ function VectorTracker:SimulateShot(
 
     local endPosition = hit and targetPosition or (muzzlePos + shotDir * dist)
 
+    -- Geração de trajetória: reta para instantânea, arco parabólico segmentado para física
+    local trajectoryPoints: { Vector3 }? = nil
+    if isPhys and g > 0 and dist > 1.0 then
+        trajectoryPoints = {}
+        local steps = 10
+        -- V_launch calculado para que no instante flightTime o projétil atinja endPosition sob gravidade
+        local vLaunch = (endPosition - muzzlePos + Vector3.new(0, 0.5 * g * flightTime * flightTime, 0)) / math.max(flightTime, 0.001)
+        for i = 0, steps do
+            local t = (i / steps) * flightTime
+            local pt = muzzlePos + (vLaunch * t) - Vector3.new(0, 0.5 * g * t * t, 0)
+            table.insert(trajectoryPoints, pt)
+        end
+    end
+
     return {
         Fired = true,
         HitRegistered = hit,
@@ -425,12 +499,16 @@ function VectorTracker:SimulateShot(
         TargetPosition = endPosition,
         ShotDirection = shotDir,
         InFov = inFov,
-        IsObstructed = isObstructed == true
+        IsObstructed = isObstructed == true,
+        FlightTime = flightTime,
+        BulletDropStuds = bulletDropStuds,
+        TrajectoryPoints = trajectoryPoints,
+        TrajectoryType = isPhys and "Physics" or "Instant"
     }
 end
 
--- Visualizador de Traçador (Tracer 3D Neon com Limpeza de Debris)
-function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
+-- Visualizador de Traçador (Tracer 3D Neon com Limpeza de Debris e Suporte a Arcos Parabólicos)
+function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?, trajectoryPoints: { Vector3 }?)
     local ok, _ = pcall(function()
         local dist = (targetPos - origin).Magnitude
         if dist < 0.1 then return end
@@ -446,22 +524,48 @@ function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color
         local tracerColor = color or Color3.fromRGB(255, 45, 60)
         local life = duration or 0.22
 
-        -- 1. Feixe de Traçador (Cilindro/Viga Neon)
-        local part = Instance.new("Part")
-        part.Name = "DeepHat_SilentAimTracer"
-        part.Anchored = true
-        part.CanCollide = false
-        part.CanTouch = false
-        part.CanQuery = false
-        part.Material = Enum.Material.Neon
-        part.Color = tracerColor
-        part.Transparency = 0.10
-        part.Size = Vector3.new(0.16, 0.16, dist)
-        part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
-        part.Parent = container
-        Debris:AddItem(part, life)
+        -- Renderização da trajetória
+        if trajectoryPoints and #trajectoryPoints >= 2 then
+            -- Segmentos parabólicos para projéteis físicos (fidelidade balística real)
+            for i = 1, #trajectoryPoints - 1 do
+                local pA = trajectoryPoints[i]
+                local pB = trajectoryPoints[i + 1]
+                local segDisp = pB - pA
+                local segDist = segDisp.Magnitude
+                if segDist > 0.05 then
+                    local seg = Instance.new("Part")
+                    seg.Name = "DeepHat_BallisticTracerSegment"
+                    seg.Anchored = true
+                    seg.CanCollide = false
+                    seg.CanTouch = false
+                    seg.CanQuery = false
+                    seg.Material = Enum.Material.Neon
+                    seg.Color = tracerColor
+                    seg.Transparency = 0.12
+                    seg.Size = Vector3.new(0.14, 0.14, segDist)
+                    seg.CFrame = CFrame.lookAt(pA, pB) * CFrame.new(0, 0, -segDist / 2)
+                    seg.Parent = container
+                    Debris:AddItem(seg, life)
+                end
+            end
+        else
+            -- Feixe de traçador retilíneo (Raycast instantâneo)
+            local part = Instance.new("Part")
+            part.Name = "DeepHat_SilentAimTracer"
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanTouch = false
+            part.CanQuery = false
+            part.Material = Enum.Material.Neon
+            part.Color = tracerColor
+            part.Transparency = 0.10
+            part.Size = Vector3.new(0.16, 0.16, dist)
+            part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
+            part.Parent = container
+            Debris:AddItem(part, life)
+        end
 
-        -- 2. Marcador de Impacto no Ponto de Destino
+        -- Marcador de Impacto no Ponto de Destino
         local impact = Instance.new("Part")
         impact.Name = "DeepHat_ImpactMarker"
         impact.Shape = Enum.PartType.Ball

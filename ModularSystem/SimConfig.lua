@@ -41,6 +41,9 @@ export type ProfileData = {
     ShowFovCircle: boolean,     -- Overlay circular do FOV na tela
     EnableLead: boolean,        -- Predicao balistica (Lead Calculation)
     ProjectileSpeed: number,    -- Velocidade do projetil para calculo de lead (studs/s)
+    ProjectileType: string,     -- "Physics" (balística com gravidade) ou "Raycast" (instantâneo)
+    ProjectileGravity: number,  -- Aceleração da gravidade balística (studs/s²) [0 - 500]
+    ProjectileDropComp: boolean,-- Compensação automática da curvatura/queda balística
     TeamCheck: boolean,         -- Ignorar companheiros de equipe
     WallOcclusionCheck: boolean,-- Verificacao de oclusao por Raycast
 
@@ -90,6 +93,9 @@ local PROFILES: { [string]: ProfileData } = {
         ShowFovCircle = true,
         EnableLead = true,
         ProjectileSpeed = 900.0,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         TeamCheck = false,
         WallOcclusionCheck = true,
         TargetRegion = "Head",
@@ -131,6 +137,9 @@ local PROFILES: { [string]: ProfileData } = {
         ShowFovCircle = true,
         EnableLead = false,
         ProjectileSpeed = 800.0,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         TeamCheck = true,
         WallOcclusionCheck = true,
         TargetRegion = "Torso",
@@ -172,6 +181,9 @@ local PROFILES: { [string]: ProfileData } = {
         ShowFovCircle = true,
         EnableLead = true,
         ProjectileSpeed = 1000.0,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         TeamCheck = false,
         WallOcclusionCheck = true,
         TargetRegion = "Head",
@@ -213,6 +225,9 @@ local PROFILES: { [string]: ProfileData } = {
         ShowFovCircle = true,
         EnableLead = true,
         ProjectileSpeed = 1200.0,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         TeamCheck = false,
         WallOcclusionCheck = true,
         TargetRegion = "Head",
@@ -254,6 +269,9 @@ local PROFILES: { [string]: ProfileData } = {
         ShowFovCircle = true,
         EnableLead = true,
         ProjectileSpeed = 900.0,
+        ProjectileType = "Physics",
+        ProjectileGravity = 196.2,
+        ProjectileDropComp = true,
         TeamCheck = false,
         WallOcclusionCheck = true,
         TargetRegion = "Head",
@@ -302,6 +320,9 @@ local DEFAULT_OVERRIDES: any = {
     SidebarEnabled = true,
     PersistenceEnabled = true,
     AllowPlayerTargets = true,
+    ProjectileType = "Physics",
+    ProjectileGravity = 196.2,
+    ProjectileDropComp = true,
     ConfigVersion = CONFIG_VERSION,
 }
 for k, v in pairs(DEFAULT_OVERRIDES) do DEFAULT_PROFILE[k] = v end
@@ -323,6 +344,9 @@ local SCHEMA: { [string]: any } = {
     SimulatedAgents = { t = "number", min = 1, max = 16 },
     VisibleOnly = { t = "boolean" }, EnableESP = { t = "boolean" }, ShowFovCircle = { t = "boolean" },
     EnableLead = { t = "boolean" }, ProjectileSpeed = { t = "number", min = 10, max = 5000 },
+    ProjectileType = { t = "string", enum = { "Physics", "Raycast" } },
+    ProjectileGravity = { t = "number", min = 0, max = 500 },
+    ProjectileDropComp = { t = "boolean" },
     TeamCheck = { t = "boolean" }, WallOcclusionCheck = { t = "boolean" },
     TargetRegion = { t = "string", enum = { "Head", "Torso", "Arms", "Legs" } },
     TargetBone = { t = "string" },

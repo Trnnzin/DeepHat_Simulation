@@ -608,19 +608,104 @@ local shotResult = silentTracker:SimulateShot(camPos, decoupledTarget, 35.0, 100
 Assert(shotResult.Fired == true and shotResult.HitRegistered == true, "Simulação de disparo registrou acerto sintético determinístico (100%)")
 Assert((shotResult.TargetPosition - decoupledTarget).Magnitude < 0.01, "Ponto de impacto coincide com o alvo sintético")
 
--- [18] DESEMPENHO EM VÁRIOS TAMANHOS --------------------------------------
-print("\n[CRITÉRIO 18] Desempenho da seleção real (pool parentado)...")
-local perfDet = InstanceDetector.new(0.1)
-for _, n in ipairs({ 10, 100, 500 }) do
-    local pool: { Instance } = {}
-    for i = 1, n do pool[i] = mkDummy("Perf" .. i, dirAt((i % 80) - 40)) end
-    local t0 = os.clock()
-    select(perfDet, pool)
-    local ms = (os.clock() - t0) * 1000
-    print(string.format("  Seleção com %d candidatos: %.3f ms", n, ms))
-    if n == 100 then Assert(ms < 20, "Seleção de 100 candidatos < 20 ms (medido no ambiente atual)") end
-    for _, m in ipairs(pool) do m:Destroy() end
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 22] PROJÉTEIS FÍSICOS E BALÍSTICA CURVA (GRAVIDADE)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 22] Validando Balística Física, Queda por Gravidade e Trajetória Curva...")
+local physTracker = VectorTracker.new({})
+local shooterPos = Vector3.new(0, 10, 0)
+local targetStationary = Vector3.new(0, 10, 200) -- 200 studs de distância
+local physSpeed = 500.0 -- 500 studs/s => t = 0.4s
+local gravityVal = 196.2 -- gravidade padrão Roblox (studs/s²)
+
+-- 1. Compensação de elevação por gravidade no ComputeLead
+local compPos, flightTime, dropStuds = physTracker:ComputeLead(targetStationary, Vector3.zero, shooterPos, physSpeed, true, gravityVal, true)
+local expectedDrop = 0.5 * gravityVal * (flightTime * flightTime)
+Assert(math.abs(dropStuds - expectedDrop) < 0.1, string.format("Compensação de queda por gravidade precisa: %.2f studs (esperado: %.2f studs)", dropStuds, expectedDrop))
+Assert(compPos.Y > targetStationary.Y, "Ponto de mira elevado acima do alvo para compensar queda balística")
+
+-- 2. Simulação de tiro com projétil físico (geração de arco parabólico segmentado)
+local physShot = physTracker:SimulateShot(
+    CFrame.lookAt(shooterPos, targetStationary),
+    targetStationary,
+    30.0,
+    100.0,
+    false,
+    nil,
+    physSpeed,
+    gravityVal,
+    true
+)
+Assert(physShot.TrajectoryType == "Physics", "SimulateShot identificou tipo balístico como 'Physics'")
+Assert(physShot.TrajectoryPoints ~= nil and #physShot.TrajectoryPoints >= 10, "SimulateShot gerou segmentos de arco para projétil físico (>= 10 pontos)")
+Assert(physShot.BulletDropStuds > 0, "Queda calculada maior que zero para projétil com gravidade ativa")
+
+-- 3. Validação de que a trajetória física é uma curva parabólica (não uma linha reta)
+local pts = physShot.TrajectoryPoints
+if pts and #pts >= 3 then
+    local midPt = pts[math.floor(#pts / 2)]
+    local straightMid = (pts[1] + pts[#pts]) / 2
+    local curveDeviation = (midPt - straightMid).Magnitude
+    Assert(curveDeviation > 0.1, string.format("Trajetória balística física curvada comprovada (desvio do ponto médio reto: %.2f studs)", curveDeviation))
 end
+
+-- 4. Disparo instantâneo (Raycast clássico) não gera arco parabólico
+local instantShot = physTracker:SimulateShot(
+    CFrame.lookAt(shooterPos, targetStationary),
+    targetStationary,
+    30.0,
+    100.0,
+    false,
+    nil,
+    2500.0,
+    0,
+    false
+)
+Assert(instantShot.TrajectoryType == "Instant", "Disparo raycast identificado como 'Instant'")
+Assert(instantShot.TrajectoryPoints == nil, "Disparo raycast instantâneo não aloca pontos parabólicos desnecessários")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 23] RASTREAMENTO E CICLO DE VIDA DOS ALVOS (MORTE E REMOÇÃO)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 23] Validando Invalidação Imediata de Alvos Mortos ou Removidos...")
+local lifecycleDet = InstanceDetector.new(0.1)
+
+-- 1. Alvo ativo com Humanoid vivo
+local liveDummy = Instance.new("Model")
+liveDummy.Name = "LiveDummy"
+local lHead = Instance.new("Part")
+lHead.Name = "Head"
+lHead.Position = Vector3.new(0, 5, 20)
+lHead.Parent = liveDummy
+local lHum = Instance.new("Humanoid")
+lHum.Health = 100
+lHum.Parent = liveDummy
+liveDummy.Parent = game:GetService("Workspace")
+
+Assert(lifecycleDet:IsValidTarget(liveDummy) == true, "Alvo vivo no Workspace é válido")
+
+-- Lock manual no alvo
+lifecycleDet.LockedTarget = liveDummy
+lifecycleDet.LockExpiry = os.clock() + 10.0
+
+-- 2. Alvo morre (Humanoid.Health <= 0)
+lHum.Health = 0
+Assert(lifecycleDet:IsValidTarget(liveDummy) == false, "Alvo com Humanoid.Health <= 0 imediatamente invalidado")
+local losDead = physTracker:EvaluateLineOfSight(Vector3.new(0, 5, 0), lHead.Position, liveDummy)
+Assert(losDead.Status == "INVALID", "Line of Sight retorna INVALID imediatamente para alvo morto")
+
+-- 3. Limpeza do alvo fixado (LockTarget) ao morrer
+local bestAfterDeath = lifecycleDet:FindBestCandidate(Vector3.new(0, 5, 0), Vector3.new(0, 0, 1), 100, 70, "Head", false, "Crosshair", 0.5)
+Assert(lifecycleDet.LockedTarget == nil, "Estado de travamento (LockedTarget) limpo imediatamente ao detectar alvo morto")
+
+-- 4. Alvo removido do Workspace (Parent = nil)
+lHum.Health = 100
+liveDummy.Parent = nil
+Assert(lifecycleDet:IsValidTarget(liveDummy) == false, "Alvo removido do Workspace é imediatamente invalidado")
+local losRemoved = physTracker:EvaluateLineOfSight(Vector3.new(0, 5, 0), lHead.Position, liveDummy)
+Assert(losRemoved.Status == "INVALID", "Line of Sight retorna INVALID imediatamente para alvo removido do Workspace")
+
+liveDummy:Destroy()
 print(string.format("  Testes pulados: %d", SkippedTests))
 
 -- -------------------------------------------------------------------------

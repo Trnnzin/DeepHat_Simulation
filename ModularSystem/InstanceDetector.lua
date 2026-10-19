@@ -32,8 +32,8 @@ end
 
 -- Validação de Integridade (Type Guarding Rigoroso)
 function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): boolean
-    -- Type Guarding: BasePart ou Model válido no DataModel
-    if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(game) then
+    -- Type Guarding: BasePart ou Model válido e fisicamente presente no Workspace
+    if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(Workspace) then
         return false
     end
 
@@ -73,19 +73,24 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
         end
     end
 
-    -- Se o modelo possuir um Humanoid, respeita a integridade de vida
+    -- Se for personagem de jogador ou modelo com Humanoid, respeita a integridade de vida e existência
     local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
-    if hum and hum.Health <= 0 then
+    if hum then
+        if hum.Health <= 0 then
+            return false
+        end
+    elseif targetPlayer ~= nil then
+        -- Personagem de jogador real SEM Humanoid é considerado morto ou em carregamento incompleto
         return false
     end
 
-    -- Modelos devem conter partes físicas válidas para serem alvos sintéticos
+    -- Modelos devem conter partes físicas válidas presentes no Workspace
     if objeto:IsA("Model") then
-        local hasPart = objeto.PrimaryPart
+        local primaryPart = objeto.PrimaryPart
             or objeto:FindFirstChild("HumanoidRootPart", true)
             or objeto:FindFirstChild("Head", true)
             or objeto:FindFirstChildWhichIsA("BasePart", true)
-        if not hasPart then
+        if not primaryPart or not primaryPart:IsDescendantOf(Workspace) then
             return false
         end
     end
@@ -287,7 +292,13 @@ function InstanceDetector:FindBestCandidate(
 
     local mode = priorityMode or "Crosshair"
     local now = os.clock()
-    local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
+
+    -- Invalidação imediata do alvo travado se ele morreu, perdeu o Humanoid ou saiu do Workspace
+    if self.LockedTarget ~= nil and not self:IsValidTarget(self.LockedTarget, teamCheck) then
+        self.LockedTarget = nil
+        self.LockExpiry = 0
+    end
+    local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry)
     local fovRadiusLimit = (maxFovDeg / 2.0) -- Raio angular relativo ao retículo da tela
 
     for _, obj in ipairs(candidates) do
@@ -342,11 +353,12 @@ function InstanceDetector:FindBestCandidate(
         end
     end
 
-    if bestTarget then
+    if bestTarget and self:IsValidTarget(bestTarget, teamCheck) then
         self.LockedTarget = bestTarget
         self.LockExpiry = now + (stickinessDuration or 0.25)
     else
         self.LockedTarget = nil
+        self.LockExpiry = 0
     end
 
     return bestTarget, bestPos, finalDist, finalAngle, finalLabel, finalHealth
