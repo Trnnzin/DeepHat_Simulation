@@ -2044,18 +2044,47 @@ do
     end
 
     local function GetSafeGuiParent(): Instance
+        -- 1. Tenta CoreGui (em executores ou ambientes com permissão elevada)
         local okCore, coreGui = pcall(function() return CoreGuiService end)
         if okCore and coreGui then
             local testOk = pcall(function()
                 local test = Instance.new("Folder")
+                test.Name = "DeepHat_PermTest"
                 test.Parent = coreGui
                 test:Destroy()
             end)
-            if testOk then return coreGui end
+            if testOk then
+                return coreGui
+            end
         end
+
+        -- 2. Tenta PlayerGui do LocalPlayer (resolvendo caso o script execute antes do spawn)
         local localPlayer = Players.LocalPlayer
-        local playerGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
-        return playerGui or Workspace
+        if not localPlayer then
+            pcall(function()
+                localPlayer = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+            end)
+            localPlayer = Players.LocalPlayer
+        end
+
+        if localPlayer then
+            local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+            if not playerGui then
+                pcall(function()
+                    playerGui = localPlayer:WaitForChild("PlayerGui", 5)
+                end)
+            end
+            if playerGui then
+                return playerGui
+            end
+        end
+
+        -- 3. Fallback CoreGui direto se acessível
+        if okCore and coreGui then
+            return coreGui
+        end
+
+        return Workspace
     end
 
     -- =========================================================================
@@ -2118,8 +2147,10 @@ do
         screenGui.Name = "DeepHat_MasterDashboard"
         screenGui.ResetOnSpawn = false
         screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        screenGui.DisplayOrder = 999
         screenGui.Parent = hostParent
         ScreenGuiInstance = screenGui
+        print(string.format("[DeepHat GUI] ScreenGui 'DeepHat_MasterDashboard' anexado a %s (%s).", hostParent.Name, hostParent.ClassName))
 
         -- ---------------------------------------------------------------------
         -- FOV Overlay na Tela
@@ -2156,10 +2187,12 @@ do
         mainFrame.BackgroundColor3 = THEME.BG_WINDOW
         mainFrame.BorderSizePixel = 0
         mainFrame.Active = true
+        mainFrame.Visible = true
         mainFrame.Parent = screenGui
         AddCorner(mainFrame, 10)
         AddStroke(mainFrame, THEME.BORDER, 1.5)
         MainFrameInstance = mainFrame
+        print("[DeepHat GUI] Janela MainFrame instanciada (Visible = true).")
 
         -- Header da Janela
         local header = Instance.new("Frame")
@@ -2256,13 +2289,18 @@ do
 
         closeBtn.MouseButton1Click:Connect(function()
             mainFrame.Visible = not mainFrame.Visible
+            print("[DeepHat GUI] Botão fechar clicado. Visibilidade:", mainFrame.Visible)
         end)
 
-        -- Alternar exibição via teclas Home ou RightShift
+        -- Alternar exibição via teclas Home ou RightShift (não bloqueado por gpe genérico)
         UserInputService.InputBegan:Connect(function(input, gpe)
-            if gpe then return end
             if input.KeyCode == Enum.KeyCode.Home or input.KeyCode == Enum.KeyCode.RightShift then
+                -- Ignora apenas se o usuário estiver ativamente digitando em um TextBox
+                if UserInputService:GetFocusedTextBox() ~= nil then
+                    return
+                end
                 mainFrame.Visible = not mainFrame.Visible
+                print("[DeepHat GUI] Atalho [HOME/RightShift] acionado. Visibilidade do painel:", mainFrame.Visible)
             end
         end)
 
@@ -3685,6 +3723,30 @@ do
         local p, f = info.scenarioPass or 0, info.scenarioFail or 0
         DetLabels["Tests"].Text = (p + f == 0) and "  Cenários LOS: nenhum executado" or string.format("  Cenários LOS: %d aprovados / %d reprovados", p, f)
     end
+
+    function DashboardGUI.Toggle(): boolean
+        if MainFrameInstance then
+            MainFrameInstance.Visible = not MainFrameInstance.Visible
+            print("[DeepHat GUI] Toggle programático:", MainFrameInstance.Visible)
+            return MainFrameInstance.Visible
+        end
+        return false
+    end
+
+    function DashboardGUI.SetVisible(visible: boolean)
+        if MainFrameInstance then
+            MainFrameInstance.Visible = visible
+            print("[DeepHat GUI] SetVisible programático:", visible)
+        end
+    end
+
+    function DashboardGUI.IsVisible(): boolean
+        return MainFrameInstance ~= nil and MainFrameInstance.Visible == true
+    end
+
+    function DashboardGUI.GetScreenGui(): ScreenGui?
+        return ScreenGuiInstance
+    end
 end
 
 -- =========================================================================
@@ -3704,10 +3766,69 @@ local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    pcall(function()
+        LocalPlayer = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    end)
+    LocalPlayer = Players.LocalPlayer
+end
+
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 -- Importação dos Módulos do Kernel
 
+-- EngineCore (avaliação defensiva) é opcional e independente da UI: se não existir no
+-- ambiente, a aba Detection informa indisponibilidade em vez de inventar dados.
+local Engine: any = nil
+do
+    -- EngineCore bundled inline
+end
+
+-- Configuração: primeira execução aplica "DeepHat Simulation Default"; depois carrega o salvo
+-- se válido (câmera/disparo sempre iniciam desligados).
+local loadStatus = SimConfig.Load()
+
+-- Inicialização da Interface
+print("[DeepHat Bootstrap] Criando interface gráfica...")
+local okGui, guiErr = pcall(function()
+    return DashboardGUI.Create()
+end)
+if not okGui then
+    warn("[DeepHat Bootstrap FATAL] Erro ao instanciar DashboardGUI: " .. tostring(guiErr))
+else
+    print("[DeepHat Bootstrap] Interface gráfica criada com sucesso.")
+end
+DashboardGUI.AddDiagnosticLog("CONFIG", string.format("Perfil: %s (%s)", SimConfig.DefaultProfileName, loadStatus), loadStatus == "restored_defaults" and "WARN" or "INFO")
+
+-- Inicialização dos Subsistemas
+local filterInstances: { Instance } = {}
+if LocalPlayer and LocalPlayer.Character then
+    table.insert(filterInstances, LocalPlayer.Character)
+end
+
+local Detector = InstanceDetector.new(0.12) -- 8.3Hz de varredura espacial desacoplada
+local Tracker = VectorTracker.new(filterInstances)
+local Renderer = VisualOverlayRenderer.new()
+
+-- Tratamento Robusto de Respawn do Personagem
+if LocalPlayer then
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        table.clear(filterInstances)
+        table.insert(filterInstances, char)
+        Tracker:SetFilterInstances(filterInstances)
+        DashboardGUI.AddDiagnosticLog("PLAYER", "Personagem recarregado no pipeline de filtros.", "INFO")
+    end)
+end
+
+-- Conexão de Ações do DashboardGUI
+DashboardGUI.OnRunLosScenario = function(id: string)
+    local outcome, res = ScenarioRunner.Run(Tracker, id)
+    if outcome and res then
+        Tracker:RecordLos(res, "Cenário:" .. outcome.Id)
+        Tracker.LastLos = res
+        DashboardGUI.AddDiagnosticLog("LOS", string.format("%s => %s (esperado %s) %s", outcome.Label, outcome.Actual, outcome.Expected, outcome.Passed and "PASS" or "FAIL"), outcome.Passed and "OK" or "WARN")
+    end
+end
 
 DashboardGUI.OnClearLosHistory = function()
     Tracker:ClearLosHistory()
@@ -4030,7 +4151,17 @@ end)
 DashboardGUI.AddDiagnosticLog("BOOTSTRAP", "DeepHat Modular Engine ativo em alta fidelidade!", "OK")
 print("[DeepHat Modular Engine] Inicializado com sucesso em alta performance!")
 
-print("[DeepHat v6.0 PRO] Suíte autônoma carregada com sucesso! Pressione [HOME] para abrir/fechar.")
+print("[DeepHat v6.0 PRO] Suíte autônoma carregada com sucesso! Pressione [HOME] ou [RightShift] para abrir/fechar.")
+
+-- Verificação de integridade da GUI
+if DashboardGUI and not DashboardGUI.GetScreenGui() then
+    warn("[DeepHat Standalone] Interface não detectada no footer. Invocando DashboardGUI.Create()...")
+    local ok, err = pcall(function() DashboardGUI.Create() end)
+    if not ok then
+        warn("[DeepHat Standalone FATAL] Falha ao criar GUI no fallback: " .. tostring(err))
+    end
+end
+
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
         Title = "DeepHat v6.0 PRO",

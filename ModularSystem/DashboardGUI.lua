@@ -82,18 +82,47 @@ local function AddStroke(parent: Instance, color: Color3, thickness: number?): U
 end
 
 local function GetSafeGuiParent(): Instance
+    -- 1. Tenta CoreGui (em executores ou ambientes com permissão elevada)
     local okCore, coreGui = pcall(function() return CoreGuiService end)
     if okCore and coreGui then
         local testOk = pcall(function()
             local test = Instance.new("Folder")
+            test.Name = "DeepHat_PermTest"
             test.Parent = coreGui
             test:Destroy()
         end)
-        if testOk then return coreGui end
+        if testOk then
+            return coreGui
+        end
     end
+
+    -- 2. Tenta PlayerGui do LocalPlayer (resolvendo caso o script execute antes do spawn)
     local localPlayer = Players.LocalPlayer
-    local playerGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
-    return playerGui or Workspace
+    if not localPlayer then
+        pcall(function()
+            localPlayer = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+        end)
+        localPlayer = Players.LocalPlayer
+    end
+
+    if localPlayer then
+        local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then
+            pcall(function()
+                playerGui = localPlayer:WaitForChild("PlayerGui", 5)
+            end)
+        end
+        if playerGui then
+            return playerGui
+        end
+    end
+
+    -- 3. Fallback CoreGui direto se acessível
+    if okCore and coreGui then
+        return coreGui
+    end
+
+    return Workspace
 end
 
 -- =========================================================================
@@ -156,8 +185,10 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     screenGui.Name = "DeepHat_MasterDashboard"
     screenGui.ResetOnSpawn = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.DisplayOrder = 999
     screenGui.Parent = hostParent
     ScreenGuiInstance = screenGui
+    print(string.format("[DeepHat GUI] ScreenGui 'DeepHat_MasterDashboard' anexado a %s (%s).", hostParent.Name, hostParent.ClassName))
 
     -- ---------------------------------------------------------------------
     -- FOV Overlay na Tela
@@ -194,10 +225,12 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     mainFrame.BackgroundColor3 = THEME.BG_WINDOW
     mainFrame.BorderSizePixel = 0
     mainFrame.Active = true
+    mainFrame.Visible = true
     mainFrame.Parent = screenGui
     AddCorner(mainFrame, 10)
     AddStroke(mainFrame, THEME.BORDER, 1.5)
     MainFrameInstance = mainFrame
+    print("[DeepHat GUI] Janela MainFrame instanciada (Visible = true).")
 
     -- Header da Janela
     local header = Instance.new("Frame")
@@ -294,13 +327,18 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
 
     closeBtn.MouseButton1Click:Connect(function()
         mainFrame.Visible = not mainFrame.Visible
+        print("[DeepHat GUI] Botão fechar clicado. Visibilidade:", mainFrame.Visible)
     end)
 
-    -- Alternar exibição via teclas Home ou RightShift
+    -- Alternar exibição via teclas Home ou RightShift (não bloqueado por gpe genérico)
     UserInputService.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
         if input.KeyCode == Enum.KeyCode.Home or input.KeyCode == Enum.KeyCode.RightShift then
+            -- Ignora apenas se o usuário estiver ativamente digitando em um TextBox
+            if UserInputService:GetFocusedTextBox() ~= nil then
+                return
+            end
             mainFrame.Visible = not mainFrame.Visible
+            print("[DeepHat GUI] Atalho [HOME/RightShift] acionado. Visibilidade do painel:", mainFrame.Visible)
         end
     end)
 
@@ -1722,6 +1760,30 @@ function DashboardGUI:UpdateDetection(info: any)
     end
     local p, f = info.scenarioPass or 0, info.scenarioFail or 0
     DetLabels["Tests"].Text = (p + f == 0) and "  Cenários LOS: nenhum executado" or string.format("  Cenários LOS: %d aprovados / %d reprovados", p, f)
+end
+
+function DashboardGUI.Toggle(): boolean
+    if MainFrameInstance then
+        MainFrameInstance.Visible = not MainFrameInstance.Visible
+        print("[DeepHat GUI] Toggle programático:", MainFrameInstance.Visible)
+        return MainFrameInstance.Visible
+    end
+    return false
+end
+
+function DashboardGUI.SetVisible(visible: boolean)
+    if MainFrameInstance then
+        MainFrameInstance.Visible = visible
+        print("[DeepHat GUI] SetVisible programático:", visible)
+    end
+end
+
+function DashboardGUI.IsVisible(): boolean
+    return MainFrameInstance ~= nil and MainFrameInstance.Visible == true
+end
+
+function DashboardGUI.GetScreenGui(): ScreenGui?
+    return ScreenGuiInstance
 end
 
 return DashboardGUI

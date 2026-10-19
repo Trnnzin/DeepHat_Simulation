@@ -61,10 +61,22 @@ def wrap_module(name: str, path: Path) -> str:
 
 def bootstrap_body() -> str:
     src = strip_common(read(BOOTSTRAP))
-    # EngineCore já está inline no standalone
-    src = re.sub(r"-- EngineCore \(avalia.*?\n\s*end\nend\n", "", src, flags=re.S, count=1)
+    # EngineCore já está inline no standalone como `Engine`
+    engine_lookup_pattern = (
+        r"local okEngine, mod = pcall\(function\(\)\s*"
+        r"local holder: any = script\.Parent\.Parent\s*"
+        r"local m = holder and holder:FindFirstChild\(\"EngineCore\"\)\s*"
+        r"return m and require\(m\) or nil\s*"
+        r"end\)\s*"
+        r"if okEngine then Engine = mod end"
+    )
+    src = re.sub(engine_lookup_pattern, "-- EngineCore bundled inline", src, flags=re.S)
     if "script.Parent" in src:
         raise SystemExit("bootstrap ainda referencia script.Parent após as transformações")
+    if "DashboardGUI.Create" not in src:
+        raise SystemExit("FATAL: DashboardGUI.Create ausente do bootstrap!")
+    if "InstanceDetector.new" not in src:
+        raise SystemExit("FATAL: InstanceDetector.new ausente do bootstrap!")
     return f"-- {'=' * 73}\n-- INICIALIZAÇÃO (SimulationBootstrap.client.lua)\n-- {'=' * 73}\n" + src
 
 

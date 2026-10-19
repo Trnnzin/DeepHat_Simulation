@@ -13,6 +13,13 @@ local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    pcall(function()
+        LocalPlayer = Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    end)
+    LocalPlayer = Players.LocalPlayer
+end
+
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 -- Importação dos Módulos do Kernel
@@ -40,12 +47,20 @@ end
 local loadStatus = SimConfig.Load()
 
 -- Inicialização da Interface
-DashboardGUI.Create()
+print("[DeepHat Bootstrap] Criando interface gráfica...")
+local okGui, guiErr = pcall(function()
+    return DashboardGUI.Create()
+end)
+if not okGui then
+    warn("[DeepHat Bootstrap FATAL] Erro ao instanciar DashboardGUI: " .. tostring(guiErr))
+else
+    print("[DeepHat Bootstrap] Interface gráfica criada com sucesso.")
+end
 DashboardGUI.AddDiagnosticLog("CONFIG", string.format("Perfil: %s (%s)", SimConfig.DefaultProfileName, loadStatus), loadStatus == "restored_defaults" and "WARN" or "INFO")
 
 -- Inicialização dos Subsistemas
 local filterInstances: { Instance } = {}
-if LocalPlayer.Character then
+if LocalPlayer and LocalPlayer.Character then
     table.insert(filterInstances, LocalPlayer.Character)
 end
 
@@ -54,12 +69,14 @@ local Tracker = VectorTracker.new(filterInstances)
 local Renderer = VisualOverlayRenderer.new()
 
 -- Tratamento Robusto de Respawn do Personagem
-LocalPlayer.CharacterAdded:Connect(function(char)
-    table.clear(filterInstances)
-    table.insert(filterInstances, char)
-    Tracker:SetFilterInstances(filterInstances)
-    DashboardGUI.AddDiagnosticLog("PLAYER", "Personagem recarregado no pipeline de filtros.", "INFO")
-end)
+if LocalPlayer then
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        table.clear(filterInstances)
+        table.insert(filterInstances, char)
+        Tracker:SetFilterInstances(filterInstances)
+        DashboardGUI.AddDiagnosticLog("PLAYER", "Personagem recarregado no pipeline de filtros.", "INFO")
+    end)
+end
 
 -- Conexão de Ações do DashboardGUI
 DashboardGUI.OnRunLosScenario = function(id: string)
