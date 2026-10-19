@@ -76,3 +76,38 @@ git add .
 git commit -m "feat: Upgrade DeepHat v6.0 PRO com 8 abas, watchdog em segundo plano e benchmarks"
 git push origin main
 ```
+
+
+---
+
+## Auditoria / Revisão (Fase 3)
+
+**Escopo:** simulação controlada. Candidatos de seleção = manequins/NPCs sintéticos (modelos em `Workspace`/pastas de teste/tags de teste). **Personagens de jogadores reais são rejeitados** em `InstanceDetector:IsValidTarget` e nunca varridos.
+
+### Line of Sight (tri-state) — `VectorTracker:EvaluateLineOfSight`
+| Estado | Significado |
+|---|---|
+| `VISIBLE` | consulta válida sem obstrução (ou atingiu o próprio alvo / colisão a < 0.8 stud do ponto final) |
+| `BLOCKED` | obstrução comprovada (objeto, distância da colisão e causa retornados) |
+| `INVALID` | entrada não finita, origem == destino, destino removido ou Raycast falhou (**não** é tratado como bloqueio nem visibilidade) |
+
+Política: `RespectCanCollide=true` — `CanCollide=false` (decoração, triggers, acessórios não colidíveis) não bloqueia; **barreira invisível com colisão bloqueia** (Transparency não é critério); água ignorada; o próprio modelo do jogador local é excluído via filtro. `CheckObstruction` permanece como wrapper booleano (`true` só se `BLOCKED`).
+
+### Seleção de alvos — `InstanceDetector`
+- Custo: a varredura completa (`ScanCandidates`) roda no máximo a cada `ScanInterval` (0.12 s no bootstrap, ≈8 Hz); nos frames intermediários apenas o pool em cache é revalidado (O(n) de candidatos, sem percorrer a árvore). Varredura completa = O(filhos do Workspace + filhos das pastas conhecidas + objetos com tags).
+- Ordenação: menor score vence; **empate → menor `GetFullName()`** (determinístico, independente da ordem do pool).
+- Histerese `0.85`: o alvo atual recebe `score × 0.85`; como `score ≥ 0`, um desafiante só vence se `score_c < 0.85·score_atual` (≥ 15 % melhor). Ex.: atual 10° → 8.5°; desafiante 9° perde, 8° vence.
+
+### EngineCore
+`CalculateSuspicion` devolve `totalScore, category, flaggedRules, anomalies (alias), explanations, unavailableMetrics, evaluatedRules, sampleCount`. Campo `nil` = telemetria indisponível (regra não avaliada, listada em `unavailableMetrics`); `0` = medição válida. Categoria `INSUFICIENTE` quando nenhuma regra pôde ser avaliada ou `sampleCount < Engine.MIN_SAMPLES (5)`. Limites em `Engine.Thresholds` (fonte única).
+
+### Perfil padrão — `DeepHat Simulation Default` (`SimConfig`)
+Tema escuro, destaque vermelho, aba inicial Dashboard, FOV visual 120 px (ajustável 20–600), LOS/telemetria/histórico ativos (limite 50), suavização 0.15, persistência ativa. **`AimbotEnabled=false` e `SilentAimEnabled=false`** — nada altera a câmera ou dispara ao abrir o painel. Primeira execução aplica os padrões; depois `SimConfig.Load()` carrega as preferências válidas (automação e disparo **sempre** voltam desligados); configuração corrompida/incompatível restaura os padrões e registra o motivo (`SimConfig.LastLoadReason`). Importação é validada e atômica (versão + tipo + faixa).
+
+### Testes
+- **Studio:** execute `MainTestRunner` (critérios 1–18). O critério 17 (ciclo real da câmera) exige cliente em *Play*; caso contrário é reportado como `[SKIP]`.
+- **Fora do Studio (Luau puro):** `luau tests_offline/run_offline.lua` após gerar as cópias (EngineCore + SimConfig com mock de JSON). Não cobre CFrame/Raycast/GUI.
+- **Standalone:** `python tools/build_standalone.py` regenera `DeepHat_Standalone.lua` a partir dos módulos (fonte única).
+
+### Pendências / validação manual
+Caixas delimitadoras e indicadores de distância da aba World/ESP ainda não existem (somente realces `Highlight`); ícones da barra lateral são glifos de texto; avaliação visual no Studio e testes de integração de GUI exigem validação manual.

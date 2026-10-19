@@ -55,38 +55,112 @@ function VectorTracker:ResetTracking()
     self.LastRawCamRotation = nil
 end
 
+-- Libera por completo o controle da câmera: após Release() o tracker não possui
+-- nenhum estado acumulado e o chamador NÃO deve mais escrever em camera.CFrame.
+-- (O CameraModule do Roblox reassume o controle no frame seguinte.)
+function VectorTracker:Release()
+    self:ResetTracking()
+    self.PreviousLookVector = Vector3.zAxis
+    self.PreviousAngularVelocity = 0
+end
+
 function VectorTracker:SetFilterInstances(instances: { Instance })
     self.RayParams.FilterDescendantsInstances = instances
 end
 
-function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): boolean
-    local displacement = (targetPos - originPos)
+export type LosResult = {
+    Status: string,        -- "VISIBLE" | "BLOCKED" | "INVALID"
+    Reason: string,        -- causa legível
+    BlockerName: string?,  -- objeto responsável pela obstrução
+    BlockerPart: BasePart?,
+    HitDistance: number?,  -- distância origem -> colisão (studs)
+    QueryDistance: number, -- distância origem -> destino
+}
+
+local function IsFiniteVec(v: Vector3): boolean
+    return v.X == v.X and v.Y == v.Y and v.Z == v.Z
+        and math.abs(v.X) ~= math.huge and math.abs(v.Y) ~= math.huge and math.abs(v.Z) ~= math.huge
+end
+
+-- Política de LOS (documentada):
+--  * RespectCanCollide = true: partes com CanCollide=false (decoração, triggers, acessórios
+--    não colidíveis) NÃO bloqueiam. Barreiras INVISÍVEIS com CanCollide=true BLOQUEIAM
+--    (são colisores de teste legítimos); Transparency NÃO é critério.
+--  * IgnoreWater = true: água não bloqueia.
+--  * O próprio alvo (e descendentes) conta como VISIBLE; o filtro Exclude cobre o modelo de teste/jogador local.
+--  * Colisão a < END_TOLERANCE studs do ponto final é tratada como atingir o destino (VISIBLE).
+--  * Entrada não finita, origem == destino ou destino removido => INVALID (nunca VISIBLE).
+local END_TOLERANCE = 0.8
+
+function VectorTracker:EvaluateLineOfSight(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): LosResult
+    if typeof(originPos) ~= "Vector3" or typeof(targetPos) ~= "Vector3"
+        or not IsFiniteVec(originPos) or not IsFiniteVec(targetPos) then
+        return { Status = "INVALID", Reason = "Posição não finita ou ausente", QueryDistance = 0 }
+    end
+    if targetInstance ~= nil and (targetInstance.Parent == nil or not targetInstance:IsDescendantOf(game)) then
+        return { Status = "INVALID", Reason = "Destino removido da árvore", QueryDistance = 0 }
+    end
+
+    local displacement = targetPos - originPos
     local dist = displacement.Magnitude
-    if dist < EPSILON then return false end
-    local dir = displacement / dist
-    local result = Workspace:Raycast(originPos, dir * dist, self.RayParams)
-    if not result then return false end
-
-    -- Se o raio colidiu com o próprio alvo (ou partes constituintes), a linha de visada está livre!
-    if targetInstance and result.Instance then
-        if result.Instance == targetInstance or result.Instance:IsDescendantOf(targetInstance) then
-            return false
-        end
+    if dist < EPSILON then
+        return { Status = "INVALID", Reason = "Origem e destino coincidentes", QueryDistance = dist }
     end
 
-    -- Ignora peças quase transparentes (zonas de teste, triggers, visores) ou não-colidíveis
-    if result.Instance then
-        if result.Instance.CanCollide == false or result.Instance.Transparency >= 0.95 then
-            return false
-        end
+    local ok, result = pcall(function()
+        return Workspace:Raycast(originPos, displacement, self.RayParams)
+    end)
+    if not ok then
+        return { Status = "INVALID", Reason = "Raycast falhou: " .. tostring(result), QueryDistance = dist }
+    end
+    if not result then
+        return { Status = "VISIBLE", Reason = "Nenhuma colisão no trajeto", QueryDistance = dist }
     end
 
-    -- Se o ponto de colisão estiver dentro da tolerância de proximidade do alvo (< 0.8 studs)
-    if (result.Position - targetPos).Magnitude < 0.8 then
-        return false
+    local hit = result.Instance
+    local hitDist = (result.Position - originPos).Magnitude
+    if targetInstance and (hit == targetInstance or hit:IsDescendantOf(targetInstance)) then
+        return { Status = "VISIBLE", Reason = "Raio atingiu o próprio alvo", HitDistance = hitDist, QueryDistance = dist }
     end
+    if (result.Position - targetPos).Magnitude < END_TOLERANCE then
+        return { Status = "VISIBLE", Reason = "Colisão dentro da tolerância do ponto final", HitDistance = hitDist, QueryDistance = dist }
+    end
+    return {
+        Status = "BLOCKED",
+        Reason = hit.Transparency >= 0.95 and "Barreira invisível colidível" or "Obstrução sólida",
+        BlockerName = hit:GetFullName(),
+        BlockerPart = hit,
+        HitDistance = hitDist,
+        QueryDistance = dist,
+    }
+end
 
-    return true
+-- Histórico limitado de consultas LOS (para a aba Line of Sight)
+VectorTracker.LosHistoryLimit = 50
+function VectorTracker:RecordLos(result: LosResult, targetName: string?)
+    local history = self.LosHistory
+    if not history then
+        history = {}
+        self.LosHistory = history
+    end
+    self.LastLos = result
+    table.insert(history, {
+        Time = os.clock(), Target = targetName or "?", Status = result.Status,
+        Reason = result.Reason, Blocker = result.BlockerName, HitDistance = result.HitDistance,
+    })
+    while #history > math.max(1, self.LosHistoryLimit or VectorTracker.LosHistoryLimit) do
+        table.remove(history, 1)
+    end
+end
+
+function VectorTracker:ClearLosHistory()
+    self.LosHistory = {}
+    self.LastLos = nil
+end
+
+-- Compatibilidade: true somente se BLOCKED comprovado (INVALID não é tratado como obstrução)
+function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): boolean
+    return self:EvaluateLineOfSight(originPos, targetPos, targetInstance).Status == "BLOCKED"
 end
 
 function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
@@ -137,7 +211,9 @@ function VectorTracker:ComputeSmoothRotation(
         return currentCFrame, 0, 0
     end
 
-    local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
+    -- dt inválido (nil, NaN, <= 0) cai no padrão de 60Hz; dt grande é limitado
+    local rawDt = (type(dt) == "number" and dt == dt and dt > 0) and dt or 0.0166
+    local safeDt = math.clamp(rawDt, 0.0001, 0.1)
 
     -- Matriz de Orientação Alvo via CFrame.lookAt
     local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)

@@ -51,6 +51,14 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
         return false
     end
 
+    -- Autorização: personagens de jogadores reais são rejeitados incondicionalmente
+    if Players:GetPlayerFromCharacter(objeto) then
+        return false
+    end
+    if objeto:IsA("BasePart") and objeto.Parent and Players:GetPlayerFromCharacter(objeto.Parent) then
+        return false
+    end
+
     -- Se o modelo possuir um Humanoid, respeita a integridade de vida
     local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
     if hum and hum.Health <= 0 then
@@ -169,12 +177,8 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
         end
     end
 
-    -- 1. Jogadores Concorrentes
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= self.LocalPlayer and p.Character then
-            Ingest(p.Character)
-        end
-    end
+    -- 1. (Removido) Personagens de jogadores reais NUNCA são candidatos: o conjunto
+    --    de alvos é restrito a manequins/NPCs sintéticos autorizados (ver IsValidTarget).
 
     -- 2. Pastas estruturadas de NPCs / Inimigos (varredura plana de 1 nível para evitar N^2 partes)
     for _, folderName in ipairs(self.SearchFolders) do
@@ -273,12 +277,19 @@ function InstanceDetector:FindBestCandidate(
                         score = angleDeg
                     end
 
-                    -- Bônus de Stickiness para o alvo atualmente travado (elimina flickering)
+                    -- Histerese: o alvo atual recebe score * 0.85 (15% de vantagem). Como
+                    -- score >= 0, um desafiante só vence se score_c < 0.85 * score_atual, ou seja,
+                    -- precisa ser >= 15% melhor. Ex.: atual 10° -> efetivo 8.5°; desafiante 9° perde, 8° vence.
                     if isStickyActive and obj == self.LockedTarget then
                         score = score * 0.85
                     end
 
-                    if score < bestScore then
+                    -- Desempate determinístico: menor score; em empate, menor nome completo.
+                    local better = score < bestScore
+                    if not better and score == bestScore and bestTarget ~= nil then
+                        better = obj:GetFullName() < (bestTarget :: Instance):GetFullName()
+                    end
+                    if better then
                         bestScore = score
                         bestTarget = obj
                         bestPos = pos

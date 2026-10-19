@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 local CoreGuiService = game:GetService("CoreGui")
 
 local SimConfig = require(script.Parent.SimConfig)
+local ScenarioRunner = require(script.Parent.ScenarioRunner)
 
 local DashboardGUI = {}
 DashboardGUI.__index = DashboardGUI
@@ -39,6 +40,8 @@ DashboardGUI.OnStartRequested = nil :: (() -> ())?
 DashboardGUI.OnStopRequested = nil :: (() -> ())?
 DashboardGUI.OnResetRequested = nil :: (() -> ())?
 DashboardGUI.OnSaveRequested = nil :: (() -> ())?
+DashboardGUI.OnRunLosScenario = nil :: ((string) -> ())?
+DashboardGUI.OnClearLosHistory = nil :: (() -> ())?
 
 -- Instâncias Internas
 local ScreenGuiInstance: ScreenGui? = nil
@@ -50,6 +53,11 @@ local unsubscribeGlobal: (() -> ())? = nil
 
 -- Elementos de Telemetria Dinâmica
 local TelemetryLabels: { [string]: TextLabel } = {}
+local LosLabels: { [string]: TextLabel } = {}
+local DetLabels: { [string]: TextLabel } = {}
+local LosHistoryList: ScrollingFrame? = nil
+local LastRenderedLosStamp = -1
+local ApplyRuntimeConfig: ((string, any) -> ())? = nil
 local PerformanceData = {
     Fps = 60,
     PeakAngVel = 0,
@@ -339,14 +347,15 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local tabButtons: { [string]: TextButton } = {}
 
     local tabs = {
-        { Id = "Overview",    Label = "📊 Painel Geral" },
-        { Id = "Camera",      Label = "🎥 Câmera & Vetores" },
-        { Id = "Simulation",  Label = "⚡ Simulação" },
-        { Id = "Vision",      Label = "👁️ Linha de Visão" },
-        { Id = "Hitbox",      Label = "🎯 Mapeamento HitBox" },
-        { Id = "Diagnostics", Label = "🛠️ Diagnósticos" },
-        { Id = "Performance", Label = "📈 Desempenho" },
-        { Id = "Settings",    Label = "⚙️ Configurações" },
+        { Id = "Dashboard",   Label = "▣  Dashboard" },
+        { Id = "Camera",      Label = "◎  Camera / Aim Simulation" },
+        { Id = "Simulation",  Label = "≋  Simulação (parâmetros)" },
+        { Id = "Vision",      Label = "◈  World / ESP" },
+        { Id = "LineOfSight", Label = "⌖  Line of Sight" },
+        { Id = "Hitbox",      Label = "◇  Regiões de Alvo" },
+        { Id = "Diagnostics", Label = "▤  Detection / Telemetry" },
+        { Id = "Performance", Label = "▥  Desempenho" },
+        { Id = "Settings",    Label = "⚙  Configuration" },
     }
 
     local function SwitchTab(tabId: string)
@@ -364,8 +373,8 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     for _, t in ipairs(tabs) do
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(1, 0, 0, 34)
-        btn.BackgroundColor3 = (t.Id == "Overview") and THEME.ACCENT_RED or THEME.BG_INPUT
-        btn.TextColor3 = (t.Id == "Overview") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        btn.BackgroundColor3 = (t.Id == "Dashboard") and THEME.ACCENT_RED or THEME.BG_INPUT
+        btn.TextColor3 = (t.Id == "Dashboard") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
         btn.Font = Enum.Font.GothamMedium
         btn.TextSize = 11
         btn.TextXAlignment = Enum.TextXAlignment.Left
@@ -388,7 +397,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         page.ScrollBarImageColor3 = THEME.BORDER_LIGHT
         page.CanvasSize = UDim2.new(0, 0, 0, 0)
         page.AutomaticCanvasSize = Enum.AutomaticSize.Y
-        page.Visible = (t.Id == "Overview")
+        page.Visible = (t.Id == "Dashboard")
         page.Parent = mainContent
 
         local pList = Instance.new("UIListLayout")
@@ -581,7 +590,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- =========================================================================
     -- [ABA 1] PAINEL GERAL (OVERVIEW)
     -- =========================================================================
-    local pageOverview = pages["Overview"]
+    local pageOverview = pages["Dashboard"]
 
     -- Card de Boas-vindas e Ativação Mestra
     local masterCard = Instance.new("Frame")
@@ -1154,10 +1163,201 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     end)
 
     CreateExportBtn("↺ RESTAURAR PADRÕES", function()
-        SimConfig.LoadProfile("Normal")
-        UpdateProfileUI("Normal")
-        DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações restauradas para o perfil Normal.", "WARN")
+        SimConfig.RestoreDefaults("Restaurar padrões (UI)")
+        UpdateProfileUI(SimConfig.DefaultProfileName)
+        DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações restauradas para o perfil padrão.", "WARN")
     end)
+
+    -- =========================================================================
+    -- [ABA] LINE OF SIGHT  (resultado tri-state, causa, obstrução, histórico, cenários)
+    -- =========================================================================
+    local function MakeInfoLabel(parent: Instance, text: string, color: Color3?, height: number?): TextLabel
+        local l = Instance.new("TextLabel")
+        l.Size = UDim2.new(1, 0, 0, height or 24)
+        l.BackgroundColor3 = THEME.BG_INPUT
+        l.BackgroundTransparency = 0.5
+        l.Font = Enum.Font.GothamMedium
+        l.TextSize = 11
+        l.TextColor3 = color or THEME.TEXT_MUTED
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.TextYAlignment = Enum.TextYAlignment.Top
+        l.TextWrapped = true
+        l.Text = "  " .. text
+        l.Parent = parent
+        AddCorner(l, 5)
+        return l
+    end
+
+    local function MakeButtonGrid(parent: Instance, cellW: number): Frame
+        local grid = Instance.new("Frame")
+        grid.Size = UDim2.new(1, 0, 0, 0)
+        grid.AutomaticSize = Enum.AutomaticSize.Y
+        grid.BackgroundTransparency = 1
+        grid.Parent = parent
+        local layout = Instance.new("UIGridLayout")
+        layout.CellSize = UDim2.new(0, cellW, 0, 28)
+        layout.CellPadding = UDim2.new(0, 6, 0, 6)
+        layout.Parent = grid
+        return grid
+    end
+
+    local function MakeGridButton(grid: Instance, text: string, onClick: () -> ())
+        local b = Instance.new("TextButton")
+        b.BackgroundColor3 = THEME.BG_INPUT
+        b.Font = Enum.Font.GothamMedium
+        b.TextSize = 10
+        b.TextColor3 = THEME.TEXT_MAIN
+        b.TextWrapped = true
+        b.Text = text
+        b.Parent = grid
+        AddCorner(b, 5)
+        AddStroke(b, THEME.BORDER, 1)
+        b.MouseButton1Click:Connect(onClick)
+    end
+
+    local pageLos = pages["LineOfSight"]
+    MakeInfoLabel(pageLos, "Política: CanCollide=false não bloqueia; barreira invisível COM colisão bloqueia; água ignorada. Cenários rodam em geometria temporária isolada (Y=900), sem jogadores reais.", THEME.TEXT_MUTED, 44)
+    LosLabels["Status"] = MakeInfoLabel(pageLos, "Última consulta: (nenhuma)", THEME.TEXT_MUTED, 26)
+    LosLabels["Reason"] = MakeInfoLabel(pageLos, "Causa: —", THEME.TEXT_MUTED, 24)
+    LosLabels["Blocker"] = MakeInfoLabel(pageLos, "Obstrução: —", THEME.TEXT_MUTED, 24)
+    LosLabels["Distance"] = MakeInfoLabel(pageLos, "Distância da colisão: —", THEME.TEXT_MUTED, 24)
+
+    local scenarioGrid = MakeButtonGrid(pageLos, 150)
+    for _, sc in ipairs(ScenarioRunner.Scenarios) do
+        MakeGridButton(scenarioGrid, "▶ " .. sc.Label, function()
+            if DashboardGUI.OnRunLosScenario then
+                DashboardGUI.OnRunLosScenario(sc.Id)
+            else
+                DashboardGUI.AddDiagnosticLog("LOS", "Executor de cenários não conectado.", "WARN")
+            end
+        end)
+    end
+    MakeGridButton(scenarioGrid, "🗑 Limpar histórico", function()
+        if DashboardGUI.OnClearLosHistory then DashboardGUI.OnClearLosHistory() end
+        if LosHistoryList then
+            for _, ch in ipairs(LosHistoryList:GetChildren()) do
+                if ch:IsA("TextLabel") then ch:Destroy() end
+            end
+        end
+    end)
+
+    local losHistory = Instance.new("ScrollingFrame")
+    losHistory.Size = UDim2.new(1, 0, 0, 170)
+    losHistory.BackgroundColor3 = THEME.BG_WINDOW
+    losHistory.ScrollBarThickness = 4
+    losHistory.CanvasSize = UDim2.new(0, 0, 0, 0)
+    losHistory.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    losHistory.Parent = pageLos
+    AddCorner(losHistory, 6)
+    AddStroke(losHistory, THEME.BORDER, 1)
+    local losHistLayout = Instance.new("UIListLayout")
+    losHistLayout.Padding = UDim.new(0, 2)
+    losHistLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    losHistLayout.Parent = losHistory
+    LosHistoryList = losHistory
+
+    -- =========================================================================
+    -- [ABA] DETECTION / TELEMETRY  (dados vindos do EngineCore real via bootstrap)
+    -- =========================================================================
+    local pageDet = pages["Diagnostics"]
+    DetLabels["State"] = MakeInfoLabel(pageDet, "Estado: aguardando amostras reais (sem dados fictícios)", THEME.TEXT_MUTED, 24)
+    DetLabels["Samples"] = MakeInfoLabel(pageDet, "Amostras válidas: 0", THEME.TEXT_MUTED, 24)
+    DetLabels["Missing"] = MakeInfoLabel(pageDet, "Dados ausentes: —", THEME.TEXT_MUTED, 40)
+    DetLabels["Rules"] = MakeInfoLabel(pageDet, "Regras avaliadas: 0", THEME.TEXT_MUTED, 24)
+    DetLabels["Anomalies"] = MakeInfoLabel(pageDet, "Anomalias: nenhuma", THEME.TEXT_MUTED, 40)
+    DetLabels["Why"] = MakeInfoLabel(pageDet, "Justificativas: —", THEME.TEXT_MUTED, 70)
+    DetLabels["Perf"] = MakeInfoLabel(pageDet, "Desempenho: —", THEME.TEXT_MUTED, 24)
+    DetLabels["Tests"] = MakeInfoLabel(pageDet, "Cenários LOS: nenhum executado", THEME.TEXT_MUTED, 24)
+
+    -- =========================================================================
+    -- [ABA] CONFIGURATION  (perfil, tema, escala, depuração, import/export, persistência)
+    -- =========================================================================
+    local pageCfg = pages["Settings"]
+    local profileLabel = MakeInfoLabel(pageCfg, "Perfil: " .. tostring(SimConfig.Get("ActiveProfile")), THEME.ACCENT_RED, 24)
+    DetLabels["Profile"] = profileLabel
+    MakeInfoLabel(pageCfg, string.format("Versão da configuração: %d  |  Perfil padrão: %s", SimConfig.ConfigVersion, SimConfig.DefaultProfileName), THEME.TEXT_MUTED, 24)
+
+    CreateToggleField(pageCfg, "Visualizar manequins sintéticos (realces)", "ShowSyntheticTargets", SimConfig.Get("ShowSyntheticTargets"))
+    CreateToggleField(pageCfg, "Marcadores e informações de depuração", "ShowDebugMarkers", SimConfig.Get("ShowDebugMarkers"))
+    CreateToggleField(pageCfg, "Diagnóstico de Line of Sight", "LineOfSightEnabled", SimConfig.Get("LineOfSightEnabled"))
+    CreateToggleField(pageCfg, "Indicadores de telemetria", "TelemetryIndicators", SimConfig.Get("TelemetryIndicators"))
+    CreateToggleField(pageCfg, "Histórico de diagnóstico", "HistoryEnabled", SimConfig.Get("HistoryEnabled"))
+    CreateToggleField(pageCfg, "Painel visível", "PanelEnabled", SimConfig.Get("PanelEnabled"))
+    CreateToggleField(pageCfg, "Barra lateral de navegação visível", "SidebarEnabled", SimConfig.Get("SidebarEnabled"))
+    CreateToggleField(pageCfg, "Persistir preferências", "PersistenceEnabled", SimConfig.Get("PersistenceEnabled"))
+    CreateSliderField(pageCfg, "Raio do FOV visual de demonstração (px)", "FovRadiusPx", 20, 600, SimConfig.Get("FovRadiusPx"), 5)
+    CreateSliderField(pageCfg, "Limite do histórico", "HistoryLimit", 5, 500, SimConfig.Get("HistoryLimit"), 5)
+    CreateSliderField(pageCfg, "Escala da interface", "UiScale", 0.7, 1.5, SimConfig.Get("UiScale"), 0.05)
+
+    local cfgGrid = MakeButtonGrid(pageCfg, 150)
+    MakeGridButton(cfgGrid, "Tema: alternar Dark/Darker", function()
+        SimConfig.Set("Theme", SimConfig.Get("Theme") == "Dark" and "Darker" or "Dark")
+    end)
+    MakeGridButton(cfgGrid, "↺ Restaurar padrões", function()
+        SimConfig.RestoreDefaults("Restaurar padrões (aba Configuration)")
+        DashboardGUI.AddDiagnosticLog("CONFIG", "Perfil restaurado: " .. SimConfig.DefaultProfileName, "OK")
+    end)
+    MakeGridButton(cfgGrid, "💾 Salvar preferências", function()
+        local saved = SimConfig.Save()
+        DashboardGUI.AddDiagnosticLog("CONFIG", saved and "Preferências salvas." or "Persistência indisponível neste ambiente (nada salvo).", saved and "OK" or "WARN")
+    end)
+    MakeGridButton(cfgGrid, "📂 Carregar preferências", function()
+        local status = SimConfig.Load()
+        DashboardGUI.AddDiagnosticLog("CONFIG", "Carregamento: " .. status .. (SimConfig.LastLoadReason ~= "" and (" — " .. SimConfig.LastLoadReason) or ""), status == "loaded" and "OK" or "WARN")
+    end)
+
+    local importBox = Instance.new("TextBox")
+    importBox.Size = UDim2.new(1, 0, 0, 54)
+    importBox.BackgroundColor3 = THEME.BG_WINDOW
+    importBox.TextColor3 = THEME.TEXT_MAIN
+    importBox.PlaceholderText = "Cole aqui o JSON exportado e clique em Importar"
+    importBox.PlaceholderColor3 = THEME.TEXT_MUTED
+    importBox.Font = Enum.Font.Code
+    importBox.TextSize = 10
+    importBox.TextWrapped = true
+    importBox.ClearTextOnFocus = false
+    importBox.MultiLine = true
+    importBox.TextXAlignment = Enum.TextXAlignment.Left
+    importBox.TextYAlignment = Enum.TextYAlignment.Top
+    importBox.Text = ""
+    importBox.Parent = pageCfg
+    AddCorner(importBox, 5)
+    AddStroke(importBox, THEME.BORDER, 1)
+    local importGrid = MakeButtonGrid(pageCfg, 150)
+    MakeGridButton(importGrid, "⬇ Importar (validado)", function()
+        local ok, errors = SimConfig.ImportJSON(importBox.Text)
+        if ok then
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Importação aplicada.", "OK")
+        else
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Importação rejeitada: " .. table.concat(errors, "; "):sub(1, 160), "WARN")
+        end
+    end)
+
+    -- Escala da interface (UIScale) e navegação refletidas a partir da configuração
+    local uiScale = Instance.new("UIScale")
+    uiScale.Scale = tonumber(SimConfig.Get("UiScale")) or 1
+    uiScale.Parent = mainFrame
+    mainFrame.Visible = SimConfig.Get("PanelEnabled") ~= false
+    sidebar.Visible = SimConfig.Get("SidebarEnabled") ~= false
+    mainFrame.BackgroundColor3 = (SimConfig.Get("Theme") == "Darker") and Color3.fromRGB(5, 6, 8) or THEME.BG_WINDOW
+
+    -- Aba inicial vem da configuração (padrão: Dashboard)
+    local startTab = tostring(SimConfig.Get("ActiveTab"))
+    if pages[startTab] then SwitchTab(startTab) else SwitchTab("Dashboard") end
+
+    ApplyRuntimeConfig = function(key: string, val: any)
+        if key == "UiScale" then
+            uiScale.Scale = math.clamp(tonumber(val) or 1, 0.7, 1.5)
+        elseif key == "PanelEnabled" then
+            mainFrame.Visible = (val == true)
+        elseif key == "SidebarEnabled" then
+            sidebar.Visible = (val == true)
+        elseif key == "Theme" then
+            mainFrame.BackgroundColor3 = (val == "Darker") and Color3.fromRGB(5, 6, 8) or THEME.BG_WINDOW
+        elseif key == "ActiveProfile" then
+            profileLabel.Text = "  Perfil: " .. tostring(val)
+        end
+    end
 
     -- ---------------------------------------------------------------------
     -- Barra Inferior de Ações
@@ -1198,20 +1398,14 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     end
 
     CreateBottomButton("↺ RESETAR", false, function()
-        SimConfig.LoadProfile("Normal")
-        UpdateProfileUI("Normal")
+        SimConfig.RestoreDefaults("Restaurar padrões (UI)")
+        UpdateProfileUI(SimConfig.DefaultProfileName)
         if DashboardGUI.OnResetRequested then DashboardGUI.OnResetRequested() end
     end)
 
     CreateBottomButton("💾 SALVAR CONFIG", false, function()
-        pcall(function()
-            game:GetService("StarterGui"):SetCore("SendNotification", {
-                Title = "DeepHat Suite",
-                Text = "Configurações persistidas com sucesso!",
-                Duration = 3
-            })
-        end)
-        DashboardGUI.AddDiagnosticLog("SAVE", "Configurações salvas no armazenamento local.", "OK")
+        local saved = SimConfig.Save()
+        DashboardGUI.AddDiagnosticLog("SAVE", saved and "Configurações persistidas." or "Persistência indisponível neste ambiente (nada salvo).", saved and "OK" or "WARN")
         if DashboardGUI.OnSaveRequested then DashboardGUI.OnSaveRequested() end
     end)
 
@@ -1238,6 +1432,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     end
 
     unsubscribeGlobal = SimConfig.SubscribeAll(function(key, val)
+        if ApplyRuntimeConfig then ApplyRuntimeConfig(key, val) end
         if key == "ActiveProfile" then
             UpdateProfileUI(tostring(val))
         elseif key == "TargetRegion" then
@@ -1285,7 +1480,7 @@ function DashboardGUI:UpdateFovCircle()
         local vp = camera.ViewportSize
         local halfFovRad = math.rad(fov / 2)
         local camFovRad = math.rad(camera.FieldOfView / 2)
-        local radius = (math.tan(halfFovRad) / math.max(math.tan(camFovRad), 0.001)) * (vp.Y / 2)
+        local radius = tonumber(SimConfig.Get("FovRadiusPx")) or 120
         FovCircleInstance.Size = UDim2.new(0, radius * 2, 0, radius * 2)
         FovCircleInstance.Position = UDim2.new(0.5, 0, 0.5, 0)
     end
@@ -1299,6 +1494,7 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
     mode: string?
 })
     if not data then return end
+    if SimConfig.Get("TelemetryIndicators") == false then return end
 
     local angVel = tonumber(data.angularVelocity) or 0
     if angVel > PerformanceData.PeakAngVel then
@@ -1386,5 +1582,80 @@ task.spawn(function()
         end
     end
 end)
+
+-- Atualiza a aba Line of Sight com dados reais do VectorTracker (LastLos / LosHistory)
+function DashboardGUI:UpdateLos(last: any, history: { any }?)
+    local status = LosLabels["Status"]
+    if not status or not status.Parent then return end
+    if not last then
+        status.Text = "  Última consulta: (nenhuma)"
+        status.TextColor3 = THEME.TEXT_MUTED
+        return
+    end
+    local color = THEME.WARNING
+    if last.Status == "VISIBLE" then color = THEME.SUCCESS elseif last.Status == "BLOCKED" then color = THEME.ACCENT_RED end
+    status.Text = "  Última consulta: " .. tostring(last.Status)
+    status.TextColor3 = color
+    LosLabels["Reason"].Text = "  Causa: " .. tostring(last.Reason)
+    LosLabels["Blocker"].Text = "  Obstrução: " .. tostring(last.BlockerName or "—")
+    LosLabels["Distance"].Text = last.HitDistance and string.format("  Distância da colisão: %.2f studs (consulta: %.2f)", last.HitDistance, last.QueryDistance or 0)
+        or string.format("  Distância da colisão: — (consulta: %.2f)", last.QueryDistance or 0)
+
+    if LosHistoryList and history then
+        local newest = history[#history]
+        local stamp = newest and (newest.Time * 1000 + #history) or 0
+        if stamp == LastRenderedLosStamp then return end
+        LastRenderedLosStamp = stamp
+        for _, ch in ipairs(LosHistoryList:GetChildren()) do
+            if ch:IsA("TextLabel") then ch:Destroy() end
+        end
+        for i = #history, math.max(1, #history - 39), -1 do
+            local h = history[i]
+            local c = THEME.WARNING
+            if h.Status == "VISIBLE" then c = THEME.SUCCESS elseif h.Status == "BLOCKED" then c = THEME.ACCENT_RED end
+            local row = Instance.new("TextLabel")
+            row.Size = UDim2.new(1, -8, 0, 18)
+            row.BackgroundTransparency = 1
+            row.Font = Enum.Font.Code
+            row.TextSize = 10
+            row.TextColor3 = c
+            row.TextXAlignment = Enum.TextXAlignment.Left
+            row.LayoutOrder = #history - i
+            row.Text = string.format("  %-8s %-14s %s%s", h.Status, tostring(h.Target), tostring(h.Reason),
+                h.Blocker and (" [" .. h.Blocker .. "]") or "")
+            row.Parent = LosHistoryList
+        end
+    end
+end
+
+-- Atualiza a aba Detection / Telemetry com o relatório real do EngineCore
+-- info = { report = SuspicionReport?, samples = number, perfMs = number?, scenarioPass = number, scenarioFail = number, engineAvailable = boolean }
+function DashboardGUI:UpdateDetection(info: any)
+    if not DetLabels["State"] or not DetLabels["State"].Parent or not info then return end
+    local r = info.report
+    if not info.engineAvailable then
+        DetLabels["State"].Text = "  Estado: EngineCore indisponível neste ambiente"
+        DetLabels["State"].TextColor3 = THEME.WARNING
+    elseif not r then
+        DetLabels["State"].Text = "  Estado: aguardando amostras reais"
+        DetLabels["State"].TextColor3 = THEME.TEXT_MUTED
+    else
+        local color = THEME.SUCCESS
+        if r.category == "INSUFICIENTE" then color = THEME.WARNING
+        elseif r.category ~= "LIMPO" then color = THEME.ACCENT_RED end
+        DetLabels["State"].Text = string.format("  Classificação: %s (score %d)", r.category, r.totalScore)
+        DetLabels["State"].TextColor3 = color
+        DetLabels["Missing"].Text = "  Dados ausentes: " .. (#r.unavailableMetrics > 0 and table.concat(r.unavailableMetrics, ", ") or "nenhum")
+        DetLabels["Rules"].Text = string.format("  Regras avaliadas: %d", r.evaluatedRules)
+        DetLabels["Anomalies"].Text = "  Anomalias: " .. (#r.anomalies > 0 and table.concat(r.anomalies, ", ") or "nenhuma")
+        DetLabels["Why"].Text = "  Justificativas: " .. (#r.explanations > 0 and table.concat(r.explanations, " | ") or "—")
+    end
+    DetLabels["Samples"].Text = string.format("  Amostras válidas: %d", info.samples or 0)
+    if info.perfMs then
+        DetLabels["Perf"].Text = string.format("  Desempenho: pipeline %.3f ms/frame", info.perfMs)
+    end
+    local p, f = info.scenarioPass or 0, info.scenarioFail or 0
+    DetLabels["Tests"].Text = (p + f == 0) and "  Cenários LOS: nenhum executado" or string.format("  Cenários LOS: %d aprovados / %d reprovados", p, f)
+end
 
 return DashboardGUI

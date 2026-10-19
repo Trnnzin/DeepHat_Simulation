@@ -277,12 +277,218 @@ print(string.format("  Tempo de Varredura - 10 alvos: %.3f ms | 50 alvos: %.3f m
 Assert(time100 < 5.0, "Varredura de 100 candidatos executada em menos de 5.0 ms (Alta Performance)")
 
 -- -------------------------------------------------------------------------
+-- [CRITÉRIO 13..18] AUDITORIA: LOS TRI-STATE, DESEMPATE, HISTERESE, ENGINE, CONFIG, CICLO REAL
+-- -------------------------------------------------------------------------
+local SkippedTests = 0
+local function Skip(testName: string, reason: string)
+    SkippedTests = SkippedTests + 1
+    warn(string.format("  ○ [SKIP] %s (%s)", testName, reason))
+end
+
+local WS = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+-- [13] LINHA DE VISÃO TRI-STATE ------------------------------------------
+print("\n[CRITÉRIO 13] LOS tri-state (VISIBLE / BLOCKED / INVALID)...")
+local losTracker = VectorTracker.new({})
+local created: { Instance } = {}
+local function mkPart(pos: Vector3, size: Vector3, canCollide: boolean, transparency: number): Part
+    local p = Instance.new("Part")
+    p.Anchored = true
+    p.Size = size
+    p.Position = pos
+    p.CanCollide = canCollide
+    p.CanQuery = true
+    p.Transparency = transparency
+    p.Parent = WS
+    table.insert(created, p)
+    return p
+end
+local losO, losT = Vector3.new(0, 900, 0), Vector3.new(0, 900, 40)
+
+Assert(losTracker:EvaluateLineOfSight(losO, losT, nil).Status == "VISIBLE", "LOS: caminho desobstruído => VISIBLE")
+
+local wall = mkPart(Vector3.new(0, 900, 20), Vector3.new(30, 30, 1), true, 0)
+local rWall = losTracker:EvaluateLineOfSight(losO, losT, nil)
+Assert(rWall.Status == "BLOCKED" and rWall.BlockerPart == wall, "LOS: parede sólida => BLOCKED com objeto responsável")
+Assert(rWall.HitDistance ~= nil and math.abs(rWall.HitDistance - 19.5) < 0.1, "LOS: distância da colisão correta (~19.5)")
+wall:Destroy()
+
+local ghost = mkPart(Vector3.new(0, 900, 20), Vector3.new(30, 30, 1), true, 1)
+local rGhost = losTracker:EvaluateLineOfSight(losO, losT, nil)
+Assert(rGhost.Status == "BLOCKED", "LOS: barreira invisível colidível continua BLOQUEANDO")
+ghost:Destroy()
+
+local deco = mkPart(Vector3.new(0, 900, 20), Vector3.new(30, 30, 1), false, 0)
+Assert(losTracker:EvaluateLineOfSight(losO, losT, nil).Status == "VISIBLE", "LOS: objeto não colidível NÃO bloqueia")
+deco:Destroy()
+
+local gone = Instance.new("Part"); gone.Parent = WS; gone:Destroy()
+Assert(losTracker:EvaluateLineOfSight(losO, losT, gone).Status == "INVALID", "LOS: destino removido => INVALID")
+Assert(losTracker:EvaluateLineOfSight(losO, losO, nil).Status == "INVALID", "LOS: origem == destino => INVALID")
+Assert(losTracker:EvaluateLineOfSight(losO, Vector3.new(0 / 0, 0, 0), nil).Status == "INVALID", "LOS: NaN => INVALID")
+
+local endWall = mkPart(Vector3.new(0, 900, 39.9), Vector3.new(30, 30, 0.2), true, 0)
+Assert(losTracker:EvaluateLineOfSight(losO, losT, nil).Status == "VISIBLE", "LOS: colisão junto ao ponto final tratada como destino alcançado")
+endWall:Destroy()
+
+losTracker.LosHistoryLimit = 3
+for i = 1, 5 do losTracker:RecordLos({ Status = "VISIBLE", Reason = "t", QueryDistance = 1 }, "T" .. i) end
+Assert(#losTracker.LosHistory == 3, "LOS: histórico respeita o limite configurado")
+losTracker:ClearLosHistory()
+Assert(#losTracker.LosHistory == 0 and losTracker.LastLos == nil, "LOS: limpar histórico")
+for _, p in ipairs(created) do if p.Parent then p:Destroy() end end
+
+-- [14] DESEMPATE DETERMINÍSTICO E HISTERESE 0.85 ---------------------------
+print("\n[CRITÉRIO 14] Desempate determinístico e histerese 0.85...")
+local function mkDummy(name: string, pos: Vector3): Model
+    local m = Instance.new("Model"); m.Name = name
+    local h = Instance.new("Part"); h.Name = "Head"; h.Anchored = true; h.Position = pos; h.Parent = m
+    m.Parent = WS
+    return m
+end
+local selOrigin = Vector3.new(0, 5, 0)
+local function dirAt(deg: number): Vector3
+    return selOrigin + Vector3.new(math.sin(math.rad(deg)), 0, math.cos(math.rad(deg))) * 30
+end
+local function select(det: any, pool: { Instance }): Instance?
+    det.CandidatePool = pool
+    det.ScanInterval = 1000
+    det.LastScanTime = os.clock()
+    local best = det:FindBestCandidate(selOrigin, Vector3.zAxis, 300, 90, "Head", false, "Crosshair", 5)
+    return best
+end
+local tieA = mkDummy("TieA", Vector3.new(10, 5, 30))
+local tieB = mkDummy("TieB", Vector3.new(-10, 5, 30))
+local d1, d2 = InstanceDetector.new(0.1), InstanceDetector.new(0.1)
+Assert(select(d1, { tieA, tieB }) == tieA, "Empate exato: vence nome completo menor (ordem A,B)")
+Assert(select(d2, { tieB, tieA }) == tieA, "Empate exato: mesmo vencedor com ordem invertida (determinístico)")
+tieA:Destroy(); tieB:Destroy()
+
+local hA = mkDummy("HystA", dirAt(10))
+local hB = mkDummy("HystB", dirAt(9))
+local hd = InstanceDetector.new(0.1)
+select(hd, { hA }) -- trava A (10°)
+Assert(select(hd, { hA, hB }) == hA, "Histerese: desafiante 9° NÃO vence atual 10° (10*0.85=8.5 < 9)")
+local hBHead = hB:FindFirstChild("Head") :: BasePart
+hBHead.Position = dirAt(8)
+Assert(select(hd, { hA, hB }) == hB, "Histerese: desafiante 8° vence atual 10° (8 < 8.5)")
+hA:Destroy(); hB:Destroy()
+
+local removed = mkDummy("Removed", dirAt(5))
+local hr = InstanceDetector.new(0.1)
+select(hr, { removed })
+removed:Destroy()
+Assert(select(hr, { removed }) == nil, "Candidato removido é descartado com segurança")
+
+local fakePlayerSafe = true
+for _, pl in ipairs(game:GetService("Players"):GetPlayers()) do
+    if pl.Character and InstanceDetector.new(0.1):IsValidTarget(pl.Character) then fakePlayerSafe = false end
+end
+Assert(fakePlayerSafe, "Personagens de jogadores reais são rejeitados como candidatos")
+
+-- [15] ENGINECORE: CONTRATO E TELEMETRIA AUSENTE ---------------------------
+print("\n[CRITÉRIO 15] EngineCore: contrato, explicações e telemetria ausente...")
+local rep = Engine:CalculateSuspicion({ angularVelocity = 900 })
+Assert(rep.anomalies == rep.flaggedRules, "Contrato: anomalies é alias de flaggedRules")
+Assert(#rep.explanations == #rep.flaggedRules and #rep.explanations > 0, "Cada regra acionada possui explicação")
+Assert(table.find(rep.unavailableMetrics, "linearSpeed") ~= nil, "Telemetria ausente listada (linearSpeed), não fabricada")
+local repZero = Engine:CalculateSuspicion({ angularVelocity = 0, linearSpeed = 0, decoupledAngleDeg = 0, singleFrameDeltaDeg = 0, consecutiveOccludedFrames = 0 })
+Assert(repZero.category == "LIMPO" and #repZero.unavailableMetrics == 0, "Valor zero medido é diferente de ausente")
+Assert(Engine:CalculateSuspicion({}).category == "INSUFICIENTE", "Sem nenhuma métrica => INSUFICIENTE")
+Assert(Engine:CalculateSuspicion({ angularVelocity = 900, sampleCount = 2 }).category == "INSUFICIENTE", "Amostra abaixo do mínimo => INSUFICIENTE")
+Assert(Engine:CalculateSuspicion({ angularVelocity = 0 / 0 }).evaluatedRules == 0, "NaN tratado como dado inválido")
+local e1, e2 = Engine:CalculateSuspicion({ angularVelocity = 500 }), Engine:CalculateSuspicion({ angularVelocity = 500 })
+Assert(e1.totalScore == e2.totalScore and e1.category == e2.category, "Resultados estáveis para a mesma entrada")
+
+-- [16] CONFIGURAÇÃO: PADRÃO, VALIDAÇÃO E PERSISTÊNCIA ----------------------
+print("\n[CRITÉRIO 16] SimConfig: perfil padrão, validação e persistência...")
+local memory: string? = nil
+SimConfig.SetStorage({
+    read = function() return memory end,
+    write = function(c: string) memory = c; return true end,
+})
+SimConfig.RestoreDefaults()
+local defs = SimConfig.GetDefaults()
+Assert(defs.ActiveProfile == "DeepHat Simulation Default", "Perfil padrão nomeado corretamente")
+Assert(defs.AimbotEnabled == false and defs.SilentAimEnabled == false, "Automação de câmera e disparo iniciam DESATIVADOS")
+Assert(defs.FovRadiusPx == 120 and defs.ActiveTab == "Dashboard" and defs.LineOfSightEnabled == true, "Valores iniciais propostos aplicados")
+SimConfig.Set("FovRadiusPx", 99999)
+Assert(SimConfig.Get("FovRadiusPx") == 120, "Set rejeita valor fora da faixa")
+SimConfig.Set("FovRadiusPx", 200)
+Assert(SimConfig.Get("FovRadiusPx") == 200, "Set aceita valor válido")
+Assert(SimConfig.Save() == true, "Save usa o adaptador de armazenamento")
+SimConfig.RestoreDefaults()
+Assert(SimConfig.Get("FovRadiusPx") == 120, "RestoreDefaults recupera o perfil completo")
+Assert(SimConfig.Load() == "loaded" and SimConfig.Get("FovRadiusPx") == 200, "Load restaura preferência válida salva")
+Assert(SimConfig.Get("AimbotEnabled") == false, "Load nunca religa automação da câmera")
+memory = "{ não é json"
+Assert(SimConfig.Load() == "restored_defaults" and SimConfig.LastLoadReason ~= "", "JSON corrompido => padrões + motivo registrado")
+memory = nil
+Assert(SimConfig.Load() == "first_run", "Sem dados salvos => primeira execução")
+local okImp, errImp = SimConfig.ImportJSON('{"ConfigVersion":99,"FovRadiusPx":150}')
+Assert(okImp == false and #errImp > 0 and SimConfig.Get("FovRadiusPx") == 120, "Import incompatível é rejeitado sem aplicar nada")
+local okImp2 = SimConfig.ImportJSON('{"ConfigVersion":1,"FovRadiusPx":150}')
+Assert(okImp2 == true and SimConfig.Get("FovRadiusPx") == 150, "Import válido é aplicado")
+local seen = 0
+local unsubCfg = SimConfig.Subscribe("FovRadiusPx", function() seen += 1 end)
+SimConfig.Set("FovRadiusPx", 160); task.wait(0.02)
+Assert(seen == 1, "Consumidores são notificados da alteração")
+unsubCfg()
+SimConfig.RestoreDefaults()
+SimConfig.SetStorage({ read = function() return nil end, write = function() return false end })
+
+-- [17] CICLO REAL: ATUALIZAÇÃO E RESTAURAÇÃO DA CÂMERA ---------------------
+print("\n[CRITÉRIO 17] Integração: ciclo real de câmera (requer cliente em Play)...")
+local liveCam = WS.CurrentCamera
+if RunService:IsClient() and liveCam and RunService:IsRunning() then
+    local origType, origCFrame = liveCam.CameraType, liveCam.CFrame
+    liveCam.CameraType = Enum.CameraType.Scriptable
+    local liveTracker = VectorTracker.new({})
+    liveCam.CFrame = CFrame.lookAt(Vector3.new(0, 900, 0), Vector3.new(0, 900, 10))
+    local aimPoint = Vector3.new(40, 900, 0)
+    local firstErr, lastErr = nil, nil
+    for _ = 1, 90 do
+        local dt = RunService.RenderStepped:Wait()
+        local cf, err = liveTracker:ComputeSmoothRotation(liveCam.CFrame, aimPoint, dt, 0.1, 1.25, false, 0, 600, true)
+        liveCam.CFrame = cf
+        firstErr = firstErr or err
+        lastErr = err
+    end
+    Assert(firstErr ~= nil and lastErr ~= nil and lastErr < firstErr * 0.1, string.format("Câmera real convergiu (%.1f° -> %.2f°)", firstErr or -1, lastErr or -1))
+    liveTracker:Release()
+    Assert(liveTracker.TrackingActive == false and liveTracker.CurrentRotation == nil and liveTracker.LastRawCamRotation == nil, "Release limpou todo o estado acumulado")
+    local frozen = liveCam.CFrame
+    for _ = 1, 5 do RunService.RenderStepped:Wait() end
+    Assert(liveCam.CFrame == frozen, "Após Release a simulação não escreve mais na câmera")
+    liveCam.CameraType, liveCam.CFrame = origType, origCFrame
+    Assert(liveCam.CameraType == origType, "Estado original da câmera restaurado")
+else
+    Skip("Ciclo real de câmera (convergência, Release, restauração)", "exige cliente em Play no Studio")
+end
+
+-- [18] DESEMPENHO EM VÁRIOS TAMANHOS --------------------------------------
+print("\n[CRITÉRIO 18] Desempenho da seleção real (pool parentado)...")
+local perfDet = InstanceDetector.new(0.1)
+for _, n in ipairs({ 10, 100, 500 }) do
+    local pool: { Instance } = {}
+    for i = 1, n do pool[i] = mkDummy("Perf" .. i, dirAt((i % 80) - 40)) end
+    local t0 = os.clock()
+    select(perfDet, pool)
+    local ms = (os.clock() - t0) * 1000
+    print(string.format("  Seleção com %d candidatos: %.3f ms", n, ms))
+    if n == 100 then Assert(ms < 20, "Seleção de 100 candidatos < 20 ms (medido no ambiente atual)") end
+    for _, m in ipairs(pool) do m:Destroy() end
+end
+print(string.format("  Testes pulados: %d", SkippedTests))
+
+-- -------------------------------------------------------------------------
 -- RESUMO FINAL
 -- -------------------------------------------------------------------------
 print("\n===================================================================")
-print(string.format("TESTES CONCLUÍDOS: %d | APROVADOS: %d | REPROVADOS: %d", TotalAssertions, PassedAssertions, FailedAssertions))
+print(string.format("TESTES CONCLUÍDOS: %d | APROVADOS: %d | REPROVADOS: %d | PULADOS: %d", TotalAssertions, PassedAssertions, FailedAssertions, SkippedTests))
 if FailedAssertions == 0 then
-    print("STATUS GERAL: [ ✓ TODOS OS 12 CRITÉRIOS APROVADOS COM 100% DE SUCESSO ]")
+    print(SkippedTests == 0 and "STATUS GERAL: [ ✓ TODAS AS ASSERÇÕES APROVADAS ]" or "STATUS GERAL: [ ✓ ASSERÇÕES EXECUTADAS APROVADAS — HÁ TESTES PULADOS (veja [SKIP]) ]")
 else
     warn("STATUS GERAL: [ ✗ FALHAS DETECTADAS - REVISE O LOG ACIMA ]")
 end

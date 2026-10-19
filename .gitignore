@@ -1,3 +1,6 @@
-﻿.vscode/
+.vscode/
 *.tmp
 *.log
+.luau_tools/
+tools/*.bak
+tests_offline/_gen/

@@ -21,9 +21,27 @@ local InstanceDetector = require(script.Parent.InstanceDetector)
 local VectorTracker = require(script.Parent.VectorTracker)
 local VisualOverlayRenderer = require(script.Parent.VisualOverlayRenderer)
 local DashboardGUI = require(script.Parent.DashboardGUI)
+local ScenarioRunner = require(script.Parent.ScenarioRunner)
+
+-- EngineCore (avaliação defensiva) é opcional e independente da UI: se não existir no
+-- ambiente, a aba Detection informa indisponibilidade em vez de inventar dados.
+local Engine: any = nil
+do
+    local okEngine, mod = pcall(function()
+        local holder: any = script.Parent.Parent
+        local m = holder and holder:FindFirstChild("EngineCore")
+        return m and require(m) or nil
+    end)
+    if okEngine then Engine = mod end
+end
+
+-- Configuração: primeira execução aplica "DeepHat Simulation Default"; depois carrega o salvo
+-- se válido (câmera/disparo sempre iniciam desligados).
+local loadStatus = SimConfig.Load()
 
 -- Inicialização da Interface
 DashboardGUI.Create()
+DashboardGUI.AddDiagnosticLog("CONFIG", string.format("Perfil: %s (%s)", SimConfig.DefaultProfileName, loadStatus), loadStatus == "restored_defaults" and "WARN" or "INFO")
 
 -- Inicialização dos Subsistemas
 local filterInstances: { Instance } = {}
@@ -44,6 +62,21 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 -- Conexão de Ações do DashboardGUI
+DashboardGUI.OnRunLosScenario = function(id: string)
+    local outcome, res = ScenarioRunner.Run(Tracker, id)
+    if outcome and res then
+        Tracker:RecordLos(res, "Cenário:" .. outcome.Id)
+        Tracker.LastLos = res
+        DashboardGUI.AddDiagnosticLog("LOS", string.format("%s => %s (esperado %s) %s", outcome.Label, outcome.Actual, outcome.Expected, outcome.Passed and "PASS" or "FAIL"), outcome.Passed and "OK" or "WARN")
+    end
+end
+
+DashboardGUI.OnClearLosHistory = function()
+    Tracker:ClearLosHistory()
+    ScenarioRunner.ClearHistory()
+    DashboardGUI.AddDiagnosticLog("LOS", "Histórico de LOS limpo.", "INFO")
+end
+
 DashboardGUI.OnStartRequested = function()
     DashboardGUI.AddDiagnosticLog("PIPELINE", "Sessão de testes ativada com sucesso.", "OK")
 end
@@ -90,16 +123,25 @@ local BIND_NAME = "DeepHat_MasterSimulationPipeline"
 pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
 
 local lastTelemetryUpdate = 0
+local lastDetectionUpdate = 0
 local lastTracerTime = 0
+local lastLosRecordTime = 0
+local lastLosStatus = ""
+local lastLosTarget: Instance? = nil
+local sampleCount = 0
+local occludedFrames = 0
+local pipelineMs = 0
+local lastMetrics: { [string]: number }? = nil
 
 RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt: number)
     local ok, _ = pcall(function()
         local camera = Workspace.CurrentCamera
         if not camera then return end
+        local frameStart = os.clock()
 
         local isSimulationActive = SimConfig.Get("SimulationActive") == true
         if not isSimulationActive then
-            Tracker:ResetTracking()
+            Tracker:Release()
             Renderer:ClearAll()
             DashboardGUI:UpdateTelemetryDisplay({
                 angularVelocity = 0,
@@ -128,11 +170,16 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local isFiring = shouldAim or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
-        local fov = tonumber(SimConfig.Get("FOV")) or 70.0
+        -- FOV de seleção: raio em pixels (FovRadiusPx, o mesmo do círculo visual) convertido em
+        -- ângulo; FOV (graus) funciona como teto máximo.
+        local fovCap = tonumber(SimConfig.Get("FOV")) or 70.0
+        local halfTan = (tonumber(SimConfig.Get("FovRadiusPx")) or 120) / math.max(camera.ViewportSize.Y / 2, 1)
+            * math.tan(math.rad(camera.FieldOfView / 2))
+        local fov = math.min(fovCap, math.deg(math.atan(halfTan)) * 2)
         local preferredBone = tostring(SimConfig.Get("TargetRegion") or "Head")
         local teamCheck = SimConfig.Get("TeamCheck") == true
         local visibleOnly = SimConfig.Get("VisibleOnly") == true
-        local enableESP = SimConfig.Get("EnableESP") == true
+        local enableESP = SimConfig.Get("EnableESP") == true and SimConfig.Get("ShowSyntheticTargets") ~= false
         local enableLead = SimConfig.Get("EnableLead") == true
         local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
         local smoothing = tonumber(SimConfig.Get("Smoothing")) or 0.15
@@ -163,6 +210,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         )
 
         local isObstructed = false
+        local lookBefore = camera.CFrame.LookVector
         local targetName = "NENHUM"
         local calculatedAngVel = 0
         local currentMode = "IDLE"
@@ -172,11 +220,26 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         if bestTarget and targetPos then
             targetName = string.format("%s (%s - %d HP)", bestTarget.Name, targetLabel, math.floor(targetHealth or 100))
 
-            -- 2. Verificação de Oclusão Geométrica (Ignorando o próprio alvo)
-            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos, bestTarget)
+            -- 2. Linha de visão tri-state (VISIBLE / BLOCKED / INVALID)
+            local losEnabled = SimConfig.Get("LineOfSightEnabled") ~= false
+            local los: any = { Status = "DISABLED", Reason = "Diagnóstico de LOS desativado (não avaliado)", QueryDistance = 0 }
+            if losEnabled then
+                los = Tracker:EvaluateLineOfSight(camera.CFrame.Position, targetPos, bestTarget)
+                Tracker.LosHistoryLimit = tonumber(SimConfig.Get("HistoryLimit")) or 50
+                local nowLos = os.clock()
+                -- Histórico: registra mudanças de estado/alvo ou, no máximo, a cada 0.5 s
+                if los.Status ~= lastLosStatus or bestTarget ~= lastLosTarget or (nowLos - lastLosRecordTime) >= 0.5 then
+                    Tracker.LastLos = los
+                    if SimConfig.Get("HistoryEnabled") ~= false then
+                        Tracker:RecordLos(los, bestTarget.Name)
+                    end
+                    lastLosStatus, lastLosTarget, lastLosRecordTime = los.Status, bestTarget, nowLos
+                end
+            end
+            isObstructed = (los.Status == "BLOCKED")
 
             -- Se configurado para "Somente Visíveis" e houver barreira real, descarta alvo
-            local isTargetValid = true
+            local isTargetValid = (los.Status ~= "INVALID")
             if visibleOnly and isObstructed then
                 isTargetValid = false
             end
@@ -220,7 +283,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                             isObstructed,
                             bestTarget
                         )
-                        if silentAimTracer and shotResult.Fired then
+                        if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                             local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
                             Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
                         end
@@ -262,6 +325,27 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             Renderer:ClearAll()
         end
 
+        -- 7a. Métricas REAIS para o EngineCore (campos não medidos permanecem nil = indisponível)
+        local tracked = (currentMode == "TRACKING" or currentMode == "SNAP")
+        if tracked then
+            local d = math.deg(math.acos(math.clamp(lookBefore:Dot(camera.CFrame.LookVector), -1.0, 1.0)))
+            sampleCount += 1
+            occludedFrames = isObstructed and (occludedFrames + 1) or 0
+            lastMetrics = {
+                angularVelocity = calculatedAngVel,
+                singleFrameDeltaDeg = d,
+                consecutiveOccludedFrames = occludedFrames,
+                decoupledAngleDeg = silentAimActive and decoupledAngle or nil,
+                sampleCount = sampleCount,
+            }
+        elseif silentAimActive then
+            sampleCount += 1
+            lastMetrics = { decoupledAngleDeg = decoupledAngle, sampleCount = sampleCount }
+        else
+            occludedFrames = 0
+            lastMetrics = nil
+        end
+
         -- 7. Retroalimentação da Telemetria para o Dashboard (Throttle de 20Hz)
         local now = os.clock()
         if (now - lastTelemetryUpdate) >= 0.05 then
@@ -276,6 +360,17 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 silentAimActive = silentAimActive
             })
             DashboardGUI:UpdateFovCircle()
+            DashboardGUI:UpdateLos(Tracker.LastLos, Tracker.LosHistory)
+            pipelineMs = pipelineMs * 0.9 + (os.clock() - frameStart) * 1000 * 0.1
+            if (now - lastDetectionUpdate) >= 0.5 then
+                lastDetectionUpdate = now
+                local report = (Engine and lastMetrics) and Engine:CalculateSuspicion(lastMetrics) or nil
+                local pass, fail = ScenarioRunner.Summary()
+                DashboardGUI:UpdateDetection({
+                    report = report, samples = sampleCount, perfMs = pipelineMs,
+                    scenarioPass = pass, scenarioFail = fail, engineAvailable = Engine ~= nil,
+                })
+            end
         end
     end)
 end)

@@ -46,11 +46,73 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
 -- =========================================================================
--- [1] MÓDULO: SimConfig (Central Reativa com Observer Pattern)
+-- MÓDULO: SimConfig.lua
 -- =========================================================================
 local SimConfig = {}
 do
-    local PROFILES: { [string]: any } = {
+    -- SimConfig.lua
+    -- Modulo 1: Gerenciador Central de Configuracoes Reativas (Observer Pattern)
+    -- Suporta perfis predefinidos, customizacao granular, notificacao de listeners e diagnosticos
+
+    local HttpService = game:GetService("HttpService")
+
+    SimConfig.__index = SimConfig
+
+    type ProfileData = {
+        -- Estado Geral & Abas
+        SimulationActive: boolean,
+        AimbotEnabled: boolean,     -- Ativador mestre do sistema de mira cinematica (Aimbot)
+        ActiveProfile: string,      -- "Normal", "Leve", "Medio", "Agressivo", "Custom"
+        ActiveTab: string,          -- "Overview", "Camera", "Simulation", "Vision", "Hitbox", "Diagnostics", "Performance", "Settings"
+
+        -- Coluna 1 / Aba Camera & Vetores
+        FOV: number,                -- Campo de visao angular util (graus) [10 - 180]
+        Smoothing: number,          -- Coeficiente de interpolacao base [0.01 - 1.0]
+        AngularVelocity: number,    -- Velocidade angular maxima (graus/segundo) [30 - 720]
+        ResponseTime: number,       -- Tempo de resposta simulado (ms) [0 - 250]
+        TrajectoryPrecision: number,-- Precisao da trajetoria (%) [50.0 - 100.0]
+        UpdateFrequency: number,    -- Frequencia de atualizacao (Hz) [10 - 144]
+        VectorRadius: number,       -- Raio maximo de atuacao (studs) [10 - 500]
+
+        -- Aba Simulacao & Comportamento
+        AimMode: string,            -- "HoldRMB", "Toggle", "AlwaysOn"
+        HoldToAim: boolean,
+        SimulateJitter: boolean,    -- Inserir micro-variacoes Perlin Noise organicas
+        EventFrequency: number,     -- Frequencia de eventos (Hz) [1 - 60]
+        Intensity: number,          -- Intensidade geral (%) [0 - 100]
+        MoveSpeed: number,          -- Velocidade simulada (studs/s) [8 - 40]
+        AccelerationCurve: number,  -- Expoente de curva Smoothstep [0.2 - 3.0]
+        CycleDuration: number,      -- Duracao do ciclo de teste (s) [5 - 120]
+        SimulatedAgents: number,    -- Agentes concorrentes simulados [1 - 16]
+
+        -- Aba Linha de Visao & ESP
+        VisibleOnly: boolean,       -- Rastrear somente se houver linha de visada desobstruida
+        EnableESP: boolean,         -- Realce visual via Highlights (AlwaysOnTop)
+        ShowFovCircle: boolean,     -- Overlay circular do FOV na tela
+        EnableLead: boolean,        -- Predicao balistica (Lead Calculation)
+        ProjectileSpeed: number,    -- Velocidade do projetil para calculo de lead (studs/s)
+        TeamCheck: boolean,         -- Ignorar companheiros de equipe
+        WallOcclusionCheck: boolean,-- Verificacao de oclusao por Raycast
+
+        -- Aba Mapeamento HitBox & Seleção de Alvos
+        TargetRegion: string,       -- "Head", "Torso", "Arms", "Legs"
+        TargetBone: string,
+        TargetPriority: string,     -- "Crosshair", "Distance", "LowestHealth"
+        TargetStickiness: number,   -- Tempo de persistência no alvo para evitar jitter de troca (s) [0.0 - 1.0]
+        MaxAngularVelocityClamp: boolean, -- Forçar limite estrito de velocidade angular máxima
+
+        -- Simulação de Silent Aim (Vetor de Disparo Desacoplado para Testes de Anti-Cheat)
+        SilentAimEnabled: boolean,   -- Simular redirecionamento de projétil sem mover a câmera
+        SilentAimFOV: number,       -- Ângulo de ativação do Silent Aim (graus) [5 - 90]
+        SilentAimHitChance: number, -- Probabilidade de redirecionamento (%) [0 - 100]
+        SilentAimTracer: boolean,   -- Desenhar traçador visual do vetor de disparo desacoplado
+
+        -- Diagnosticos e Seguranca
+        WatchdogEnabled: boolean,   -- Verificacao continua de integridade em segundo plano
+        DebugLogging: boolean,      -- Exibir logs no console do Studio
+    }
+
+    local PROFILES: { [string]: ProfileData } = {
         ["Normal"] = {
             SimulationActive = true,
             AimbotEnabled = true,
@@ -78,6 +140,7 @@ do
             EnableLead = true,
             ProjectileSpeed = 900.0,
             TeamCheck = false,
+            WallOcclusionCheck = true,
             TargetRegion = "Head",
             TargetBone = "Head",
             TargetPriority = "Crosshair",
@@ -117,6 +180,7 @@ do
             EnableLead = false,
             ProjectileSpeed = 800.0,
             TeamCheck = true,
+            WallOcclusionCheck = true,
             TargetRegion = "Torso",
             TargetBone = "Torso",
             TargetPriority = "Crosshair",
@@ -156,6 +220,7 @@ do
             EnableLead = true,
             ProjectileSpeed = 1000.0,
             TeamCheck = false,
+            WallOcclusionCheck = true,
             TargetRegion = "Head",
             TargetBone = "Head",
             TargetPriority = "Crosshair",
@@ -195,6 +260,7 @@ do
             EnableLead = true,
             ProjectileSpeed = 1200.0,
             TeamCheck = false,
+            WallOcclusionCheck = true,
             TargetRegion = "Head",
             TargetBone = "Head",
             TargetPriority = "Crosshair",
@@ -234,6 +300,7 @@ do
             EnableLead = true,
             ProjectileSpeed = 900.0,
             TeamCheck = false,
+            WallOcclusionCheck = true,
             TargetRegion = "Head",
             TargetBone = "Head",
             TargetPriority = "Crosshair",
@@ -248,22 +315,109 @@ do
         }
     }
 
-    local CurrentState: { [string]: any } = {}
-    for k, v in pairs(PROFILES["Normal"]) do
-        CurrentState[k] = v
-    end
+    -- =========================================================================
+    -- PERFIL PADRÃO Único: "DeepHat Simulation Default"
+    -- Fonte única dos valores iniciais. Segurança: automação de câmera e simulação de
+    -- disparos iniciam DESATIVADAS; nada age só porque o painel foi aberto.
+    -- =========================================================================
+    local DEFAULT_NAME = "DeepHat Simulation Default"
+    local CONFIG_VERSION = 1
+    local DEFAULT_PROFILE: any = {}
+    for k, v in pairs(PROFILES["Normal"]) do DEFAULT_PROFILE[k] = v end
+    local DEFAULT_OVERRIDES: any = {
+        ActiveProfile = DEFAULT_NAME,
+        ActiveTab = "Dashboard",
+        SimulationActive = true,       -- pipeline de diagnóstico ligado; não move câmera por si só
+        AimbotEnabled = false,         -- automação de câmera: DESATIVADA
+        SilentAimEnabled = false,      -- simulação de disparo: DESATIVADA
+        Smoothing = 0.15,              -- [0.01-1.0]; menor = resposta mais rápida (documentado em VectorTracker)
+        ShowFovCircle = true,
+        FovRadiusPx = 120,             -- raio do FOV visual de demonstração (px) [20-600]
+        ShowSyntheticTargets = true,
+        ShowDebugMarkers = true,
+        LineOfSightEnabled = true,
+        TelemetryIndicators = true,
+        HistoryEnabled = true,
+        HistoryLimit = 50,             -- [5-500]
+        Theme = "Dark",
+        AccentRed = true,
+        UiScale = 1.0,                 -- [0.7-1.5]
+        PanelEnabled = true,
+        SidebarEnabled = true,
+        PersistenceEnabled = true,
+        ConfigVersion = CONFIG_VERSION,
+    }
+    for k, v in pairs(DEFAULT_OVERRIDES) do DEFAULT_PROFILE[k] = v end
+    PROFILES[DEFAULT_NAME] = DEFAULT_PROFILE
 
+    -- Esquema de validação: tipo + faixa/enum. Chaves fora do esquema são rejeitadas.
+    local SCHEMA: { [string]: any } = {
+        SimulationActive = { t = "boolean" }, AimbotEnabled = { t = "boolean" },
+        ActiveProfile = { t = "string" },
+        ActiveTab = { t = "string" },
+        FOV = { t = "number", min = 10, max = 180 }, Smoothing = { t = "number", min = 0.01, max = 1.0 },
+        AngularVelocity = { t = "number", min = 30, max = 1200 }, ResponseTime = { t = "number", min = 0, max = 250 },
+        TrajectoryPrecision = { t = "number", min = 50, max = 100 }, UpdateFrequency = { t = "number", min = 10, max = 144 },
+        VectorRadius = { t = "number", min = 10, max = 500 },
+        AimMode = { t = "string", enum = { "HoldRMB", "Toggle", "AlwaysOn" } }, HoldToAim = { t = "boolean" },
+        SimulateJitter = { t = "boolean" }, EventFrequency = { t = "number", min = 1, max = 60 },
+        Intensity = { t = "number", min = 0, max = 100 }, MoveSpeed = { t = "number", min = 8, max = 40 },
+        AccelerationCurve = { t = "number", min = 0.2, max = 3.0 }, CycleDuration = { t = "number", min = 5, max = 120 },
+        SimulatedAgents = { t = "number", min = 1, max = 16 },
+        VisibleOnly = { t = "boolean" }, EnableESP = { t = "boolean" }, ShowFovCircle = { t = "boolean" },
+        EnableLead = { t = "boolean" }, ProjectileSpeed = { t = "number", min = 10, max = 5000 },
+        TeamCheck = { t = "boolean" }, WallOcclusionCheck = { t = "boolean" },
+        TargetRegion = { t = "string", enum = { "Head", "Torso", "Arms", "Legs" } },
+        TargetBone = { t = "string" },
+        TargetPriority = { t = "string", enum = { "Crosshair", "Distance", "LowestHealth" } },
+        TargetStickiness = { t = "number", min = 0, max = 1 }, MaxAngularVelocityClamp = { t = "boolean" },
+        SilentAimEnabled = { t = "boolean" }, SilentAimFOV = { t = "number", min = 5, max = 90 },
+        SilentAimHitChance = { t = "number", min = 0, max = 100 }, SilentAimTracer = { t = "boolean" },
+        WatchdogEnabled = { t = "boolean" }, DebugLogging = { t = "boolean" },
+        FovRadiusPx = { t = "number", min = 20, max = 600 }, ShowSyntheticTargets = { t = "boolean" },
+        ShowDebugMarkers = { t = "boolean" }, LineOfSightEnabled = { t = "boolean" },
+        TelemetryIndicators = { t = "boolean" }, HistoryEnabled = { t = "boolean" },
+        HistoryLimit = { t = "number", min = 5, max = 500 }, Theme = { t = "string", enum = { "Dark", "Darker" } },
+        AccentRed = { t = "boolean" }, UiScale = { t = "number", min = 0.7, max = 1.5 },
+        PanelEnabled = { t = "boolean" }, SidebarEnabled = { t = "boolean" },
+        PersistenceEnabled = { t = "boolean" }, ConfigVersion = { t = "number", min = 1, max = 1000 },
+    }
+
+    -- Estado em memória: cópia do perfil padrão (sem duplicar valores em outro lugar)
+    local CurrentState: any = {}
+    for k, v in pairs(DEFAULT_PROFILE) do CurrentState[k] = v end
+
+    -- Observadores
     local KeyListeners: { [string]: { (any) -> () } } = {}
     local GlobalListeners: { (string, any) -> () } = {}
 
     function SimConfig.Get(key: string): any
-        return CurrentState[key]
+        return (CurrentState :: any)[key]
+    end
+
+    function SimConfig.GetAll(): ProfileData
+        local clone: any = {}
+        for k, v in pairs(CurrentState) do
+            clone[k] = v
+        end
+        return clone
     end
 
     function SimConfig.Set(key: string, value: any, silent: boolean?)
-        if CurrentState[key] == value then return end
-        CurrentState[key] = value
+        if SCHEMA[key] ~= nil then
+            local okV, why = SimConfig.ValidateValue(key, value)
+            if not okV then
+                warn("[SimConfig] Valor rejeitado: " .. tostring(why))
+                return
+            end
+        end
+        if (CurrentState :: any)[key] == value then
+            return
+        end
 
+        (CurrentState :: any)[key] = value
+
+        -- Se o usuario alterar um parametro individualmente sem selecionar perfil, muda para Custom
         if key ~= "ActiveProfile" and key ~= "SimulationActive" and key ~= "ActiveTab" and CurrentState.ActiveProfile ~= "Custom" then
             CurrentState.ActiveProfile = "Custom"
             SimConfig.Notify("ActiveProfile", "Custom")
@@ -280,19 +434,25 @@ do
                 task.spawn(callback, value)
             end
         end
+
         for _, callback in ipairs(GlobalListeners) do
             task.spawn(callback, key, value)
         end
     end
 
     function SimConfig.Subscribe(key: string, callback: (any) -> ()): () -> ()
-        if not KeyListeners[key] then KeyListeners[key] = {} end
+        if not KeyListeners[key] then
+            KeyListeners[key] = {}
+        end
         table.insert(KeyListeners[key], callback)
+
         return function()
             local list = KeyListeners[key]
             if not list then return end
             local idx = table.find(list, callback)
-            if idx then table.remove(list, idx) end
+            if idx then
+                table.remove(list, idx)
+            end
         end
     end
 
@@ -300,84 +460,422 @@ do
         table.insert(GlobalListeners, callback)
         return function()
             local idx = table.find(GlobalListeners, callback)
-            if idx then table.remove(GlobalListeners, idx) end
+            if idx then
+                table.remove(GlobalListeners, idx)
+            end
         end
     end
 
     function SimConfig.LoadProfile(profileName: string)
         local profile = PROFILES[profileName]
-        if not profile then return end
+        if not profile then
+            warn(string.format("[SimConfig] Perfil desconhecido: %s", tostring(profileName)))
+            return
+        end
+
         for k, v in pairs(profile) do
             if k ~= "SimulationActive" and k ~= "ActiveTab" then
-                CurrentState[k] = v
+                (CurrentState :: any)[k] = v
                 SimConfig.Notify(k, v)
             end
         end
     end
 
     function SimConfig.ExportJSON(): string
-        local ok, encoded = pcall(function() return HttpService:JSONEncode(CurrentState) end)
+        local ok, encoded = pcall(function()
+            return HttpService:JSONEncode(CurrentState)
+        end)
         return ok and encoded or "{}"
+    end
+
+    local function LegacyImportJSON(jsonStr: string): boolean
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(jsonStr)
+        end)
+        if ok and typeof(data) == "table" then
+            for k, v in pairs(data) do
+                if (CurrentState :: any)[k] ~= nil then
+                    SimConfig.Set(k, v)
+                end
+            end
+            return true
+        end
+        return false
+    end
+
+    -- =========================================================================
+    -- PERFIL PADRÃO, VALIDAÇÃO E PERSISTÊNCIA
+    -- =========================================================================
+    SimConfig.DefaultProfileName = DEFAULT_NAME
+    SimConfig.ConfigVersion = CONFIG_VERSION
+    SimConfig.LastLoadStatus = "none"   -- "first_run" | "loaded" | "restored_defaults" | "none"
+    SimConfig.LastLoadReason = ""
+    SimConfig.DiagnosticLog = {} :: { string }
+
+    local function LogReason(msg: string)
+        table.insert(SimConfig.DiagnosticLog, msg)
+        if #SimConfig.DiagnosticLog > 50 then table.remove(SimConfig.DiagnosticLog, 1) end
+        warn("[SimConfig] " .. msg)
+    end
+
+    function SimConfig.GetDefaults(): any
+        local c: any = {}
+        for k, v in pairs(DEFAULT_PROFILE) do c[k] = v end
+        return c
+    end
+
+    -- Valida um valor isolado. Retorna (ok, motivo)
+    function SimConfig.ValidateValue(key: string, value: any): (boolean, string?)
+        local rule = SCHEMA[key]
+        if not rule then return false, "chave desconhecida: " .. tostring(key) end
+        if type(value) ~= rule.t then
+            return false, string.format("%s: esperado %s, recebido %s", key, rule.t, type(value))
+        end
+        if rule.t == "number" then
+            if value ~= value or value == math.huge or value == -math.huge then
+                return false, key .. ": número não finito"
+            end
+            if (rule.min and value < rule.min) or (rule.max and value > rule.max) then
+                return false, string.format("%s: %s fora da faixa [%s, %s]", key, tostring(value), tostring(rule.min), tostring(rule.max))
+            end
+        end
+        if rule.enum and not table.find(rule.enum, value) then
+            return false, string.format("%s: valor '%s' não permitido", key, tostring(value))
+        end
+        return true, nil
+    end
+
+    -- Valida uma tabela inteira. Retorna (limpa, erros). Qualquer erro => importação rejeitada pelo chamador.
+    function SimConfig.Validate(data: any): (any, { string })
+        local errors: { string } = {}
+        local clean: any = {}
+        if type(data) ~= "table" then
+            return clean, { "configuração não é uma tabela" }
+        end
+        if type(data.ConfigVersion) ~= "number" then
+            table.insert(errors, "ConfigVersion ausente")
+        elseif data.ConfigVersion ~= CONFIG_VERSION then
+            table.insert(errors, string.format("versão incompatível: %s (esperada %d)", tostring(data.ConfigVersion), CONFIG_VERSION))
+        end
+        for k, v in pairs(data) do
+            local ok, why = SimConfig.ValidateValue(k, v)
+            if ok then clean[k] = v else table.insert(errors, why :: string) end
+        end
+        -- Segurança: perfis importados/persistidos nunca ligam automação de câmera ou disparo sozinhos
+        -- no primeiro carregamento; o usuário inicia explicitamente. (Aplicado em Load, não em Import manual.)
+        return clean, errors
+    end
+
+    function SimConfig.RestoreDefaults(reason: string?)
+        for k, v in pairs(DEFAULT_PROFILE) do
+            (CurrentState :: any)[k] = v
+            SimConfig.Notify(k, v)
+        end
+        if reason then LogReason("Padrões restaurados: " .. reason) end
+    end
+
+    function SimConfig.ExportJSON(): string
+        local ok, encoded = pcall(function()
+            return HttpService:JSONEncode(CurrentState)
+        end)
+        return ok and encoded or "{}"
+    end
+
+    -- Importação validada e atômica: se houver QUALQUER erro nada é aplicado. Retorna (ok, erros)
+    function SimConfig.ImportJSON(jsonStr: string): (boolean, { string })
+        local ok, data = pcall(function() return HttpService:JSONDecode(jsonStr) end)
+        if not ok then return false, { "JSON inválido" } end
+        local clean, errors = SimConfig.Validate(data)
+        if #errors > 0 then return false, errors end
+        for k, v in pairs(clean) do
+            if (CurrentState :: any)[k] ~= v then
+                (CurrentState :: any)[k] = v
+                SimConfig.Notify(k, v)
+            end
+        end
+        return true, {}
+    end
+
+    -- Armazenamento injetável (testes usam um adaptador em memória). Padrão: arquivo local do
+    -- executor quando existir; caso contrário, sem persistência (registrado, não silencioso).
+    local STORE_FILE = "DeepHat_Simulation_Config.json"
+    local Storage: any = {
+        read = function(): string?
+            local rf = (getfenv and (getfenv() :: any).readfile) or nil
+            local isf = (getfenv and (getfenv() :: any).isfile) or nil
+            if rf and isf then
+                local okE, exists = pcall(isf, STORE_FILE)
+                if okE and exists then
+                    local okR, content = pcall(rf, STORE_FILE)
+                    if okR then return content end
+                end
+            end
+            return nil
+        end,
+        write = function(content: string): boolean
+            local wf = (getfenv and (getfenv() :: any).writefile) or nil
+            if not wf then return false end
+            return (pcall(wf, STORE_FILE, content))
+        end,
+    }
+
+    function SimConfig.SetStorage(adapter: any)
+        Storage = adapter
+    end
+
+    function SimConfig.Save(): boolean
+        if CurrentState.PersistenceEnabled ~= true then return false end
+        local okW = Storage.write(SimConfig.ExportJSON())
+        if not okW then LogReason("Persistência indisponível: configuração não salva") end
+        return okW
+    end
+
+    -- Primeira execução: aplica padrões. Demais: carrega o salvo se válido; senão, restaura padrões
+    -- e registra o motivo. Automação de câmera e disparo sempre voltam DESLIGADAS ao carregar.
+    function SimConfig.Load(): string
+        local raw = Storage.read()
+        if raw == nil or raw == "" then
+            SimConfig.RestoreDefaults()
+            SimConfig.LastLoadStatus, SimConfig.LastLoadReason = "first_run", "nenhuma configuração salva"
+            return "first_run"
+        end
+        local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+        local errors: { string } = {}
+        local clean: any = nil
+        if not ok then
+            errors = { "JSON corrompido" }
+        else
+            clean, errors = SimConfig.Validate(data)
+        end
+        if #errors > 0 then
+            SimConfig.RestoreDefaults(table.concat(errors, "; "))
+            SimConfig.LastLoadStatus, SimConfig.LastLoadReason = "restored_defaults", table.concat(errors, "; ")
+            return "restored_defaults"
+        end
+        for k, v in pairs(clean) do
+            (CurrentState :: any)[k] = v
+            SimConfig.Notify(k, v)
+        end
+        for _, k in ipairs({ "AimbotEnabled", "SilentAimEnabled" }) do
+            (CurrentState :: any)[k] = false
+            SimConfig.Notify(k, false)
+        end
+        SimConfig.LastLoadStatus, SimConfig.LastLoadReason = "loaded", ""
+        return "loaded"
     end
 end
 
 -- =========================================================================
--- [2] MÓDULO: InstanceDetector (Detecção Universal de Entidades)
+-- MÓDULO: ScenarioRunner.lua
+-- =========================================================================
+local ScenarioRunner = {}
+do
+    -- =========================================================================
+    -- ScenarioRunner.lua
+    -- Executa cenários sintéticos de Line-of-Sight em geometria ISOLADA e temporária
+    -- (pasta DeepHat_Scenarios, Y=900, descartada ao final). Nunca toca em jogadores
+    -- reais nem em objetos de terceiros. Usa VectorTracker:EvaluateLineOfSight.
+    -- =========================================================================
+
+    local Workspace = game:GetService("Workspace")
+
+
+    type ScenarioDef = { Id: string, Label: string, Expected: string }
+    type ScenarioOutcome = {
+        Id: string, Label: string, Expected: string, Actual: string,
+        Passed: boolean, Reason: string, Time: number,
+    }
+
+    ScenarioRunner.Scenarios = {
+        { Id = "Clear",       Label = "Caminho desobstruído",         Expected = "VISIBLE" },
+        { Id = "SolidWall",   Label = "Parede sólida",                Expected = "BLOCKED" },
+        { Id = "InvisBarrier",Label = "Barreira invisível colidível", Expected = "BLOCKED" },
+        { Id = "NonCollide",  Label = "Objeto não colidível",         Expected = "VISIBLE" },
+        { Id = "InvalidDest", Label = "Destino removido",             Expected = "INVALID" },
+        { Id = "Coincident",  Label = "Origem = destino",             Expected = "INVALID" },
+        { Id = "EndCollision",Label = "Colisão junto ao ponto final", Expected = "VISIBLE" },
+    } :: { ScenarioDef }
+
+    ScenarioRunner.History = {} :: { ScenarioOutcome }
+    ScenarioRunner.HistoryLimit = 100
+
+    local ORIGIN = Vector3.new(0, 900, 0)
+    local TARGET = Vector3.new(0, 900, 40)
+
+    local function MakePart(folder: Instance, z: number, depth: number, canCollide: boolean, transparency: number): Part
+        local p = Instance.new("Part")
+        p.Anchored = true
+        p.Size = Vector3.new(30, 30, depth)
+        p.Position = Vector3.new(0, 900, z)
+        p.CanCollide = canCollide
+        p.CanQuery = true
+        p.Transparency = transparency
+        p.Parent = folder
+        return p
+    end
+
+    -- Executa um cenário; devolve o resultado e o LosResult bruto.
+    function ScenarioRunner.Run(tracker: any, id: string): (ScenarioOutcome?, any?)
+        local def: ScenarioDef? = nil
+        for _, s in ipairs(ScenarioRunner.Scenarios) do
+            if s.Id == id then def = s end
+        end
+        if not def then return nil, nil end
+
+        local folder = Instance.new("Folder")
+        folder.Name = "DeepHat_Scenarios"
+        folder.Parent = Workspace
+
+        local origin, target, targetInst = ORIGIN, TARGET, nil
+        local ok, result = pcall(function()
+            if id == "SolidWall" then MakePart(folder, 20, 1, true, 0)
+            elseif id == "InvisBarrier" then MakePart(folder, 20, 1, true, 1)
+            elseif id == "NonCollide" then MakePart(folder, 20, 1, false, 0)
+            elseif id == "InvalidDest" then
+                local t = Instance.new("Part"); t.Parent = folder; t:Destroy(); targetInst = t
+            elseif id == "Coincident" then target = origin
+            elseif id == "EndCollision" then MakePart(folder, 39.9, 0.2, true, 0)
+            end
+            return tracker:EvaluateLineOfSight(origin, target, targetInst)
+        end)
+        folder:Destroy()
+
+        local outcome: ScenarioOutcome
+        if ok and result then
+            outcome = {
+                Id = def.Id, Label = def.Label, Expected = def.Expected, Actual = result.Status,
+                Passed = (result.Status == def.Expected), Reason = result.Reason, Time = os.clock(),
+            }
+        else
+            outcome = {
+                Id = def.Id, Label = def.Label, Expected = def.Expected, Actual = "INVALID",
+                Passed = (def.Expected == "INVALID"), Reason = "Erro de execução: " .. tostring(result), Time = os.clock(),
+            }
+            result = { Status = "INVALID", Reason = outcome.Reason, QueryDistance = 0 }
+        end
+
+        table.insert(ScenarioRunner.History, outcome)
+        while #ScenarioRunner.History > ScenarioRunner.HistoryLimit do
+            table.remove(ScenarioRunner.History, 1)
+        end
+        return outcome, result
+    end
+
+    function ScenarioRunner.Summary(): (number, number)
+        local pass, fail = 0, 0
+        for _, o in ipairs(ScenarioRunner.History) do
+            if o.Passed then pass += 1 else fail += 1 end
+        end
+        return pass, fail
+    end
+
+    function ScenarioRunner.ClearHistory()
+        table.clear(ScenarioRunner.History)
+    end
+end
+
+-- =========================================================================
+-- MÓDULO: InstanceDetector.lua
 -- =========================================================================
 local InstanceDetector = {}
-InstanceDetector.__index = InstanceDetector
 do
+    -- InstanceDetector.lua
+    -- Pilar 1: Motor de Detecção de Instâncias de Alta Precisão (Targeting Engine)
+    -- Type Guarding estrito, Hierarquia Profunda, :GetPivot() e Filtro de Magnitude
+
+    local CollectionService = game:GetService("CollectionService")
+    local Players = game:GetService("Players")
+    local Workspace = game:GetService("Workspace")
+
+    InstanceDetector.__index = InstanceDetector
+
+    type CandidateTarget = {
+        Instance: Instance,
+        Position: Vector3,
+        Distance: number,
+        Label: string
+    }
+
     function InstanceDetector.new(scanInterval: number?)
         local self = setmetatable({}, InstanceDetector)
-        self.ScanInterval = scanInterval or 0.12
+        self.ScanInterval = scanInterval or 0.15 -- 6.6Hz de varredura espacial desacoplada
         self.LastScanTime = 0
         self.CandidatePool = {} :: { Instance }
+        self.LocalPlayer = Players.LocalPlayer
         self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
-        self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Entities", "Targets" }
+        self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
         self.LockedTarget = nil :: Instance?
         self.LockExpiry = 0
         return self
     end
 
+    -- Validação de Integridade (Type Guarding Rigoroso)
     function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): boolean
+        -- Type Guarding: BasePart ou Model válido no DataModel
         if not objeto or not (objeto:IsA("BasePart") or objeto:IsA("Model")) or not objeto:IsDescendantOf(game) then
             return false
         end
-        local myChar = LocalPlayer and LocalPlayer.Character
+
+        local myChar = self.LocalPlayer and self.LocalPlayer.Character
         if myChar and (objeto == myChar or objeto:IsDescendantOf(myChar)) then
             return false
         end
+
+        -- Ignora explicitamente geometrias estáticas do mundo
         if objeto:IsA("Terrain") or objeto.Name == "Terrain" or objeto.Name == "Baseplate" then
             return false
         end
+        local lowerName = objeto.Name:lower()
+        if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" then
+            return false
+        end
+
+        -- Autorização: personagens de jogadores reais são rejeitados incondicionalmente
+        if Players:GetPlayerFromCharacter(objeto) then
+            return false
+        end
+        if objeto:IsA("BasePart") and objeto.Parent and Players:GetPlayerFromCharacter(objeto.Parent) then
+            return false
+        end
+
+        -- Se o modelo possuir um Humanoid, respeita a integridade de vida
         local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
         if hum and hum.Health <= 0 then
             return false
         end
-        if teamCheck and LocalPlayer and LocalPlayer.Team then
+
+        -- Verificação de equipe para Jogadores
+        if teamCheck and self.LocalPlayer and self.LocalPlayer.Team then
             local otherPlayer = Players:GetPlayerFromCharacter(objeto)
-            if otherPlayer and otherPlayer.Team == LocalPlayer.Team then
+            if otherPlayer and otherPlayer.Team == self.LocalPlayer.Team then
                 return false
             end
         end
+
         return true
     end
 
+    -- Resolução de Posição 3D: Suporte universal a BasePart e Model (:GetPivot())
     function InstanceDetector:ResolvePivotPosition(objeto: Instance, preferredBone: string?): (Vector3?, BasePart?, string)
         if not self:IsValidTarget(objeto) then
             return nil, nil, "None"
         end
+
+        -- Caso 1: Objeto é uma BasePart direta
         if objeto:IsA("BasePart") then
             return objeto.Position, objeto, objeto.Name
         end
 
+        -- Caso 2: Objeto é um Model (com hierarquia profunda de partes)
         local model = objeto :: Model
         local bone = string.lower(preferredBone or "head")
         local targetPart: BasePart? = nil
         local label = "Pivot"
 
+        -- 1. Resolução hierárquica por ossos do modelo
         if bone == "head" then
-            targetPart = model:FindFirstChild("Head", true) :: BasePart? or model:FindFirstChild("head", true) :: BasePart?
+            targetPart = model:FindFirstChild("Head", true) :: BasePart?
+                or model:FindFirstChild("head", true) :: BasePart?
             label = "Head"
         elseif bone == "torso" or bone == "uppertorso" then
             targetPart = model:FindFirstChild("UpperTorso", true) :: BasePart?
@@ -388,39 +886,62 @@ do
             targetPart = model:FindFirstChild("RightUpperArm", true) :: BasePart?
                 or model:FindFirstChild("RightArm", true) :: BasePart?
                 or model:FindFirstChild("LeftUpperArm", true) :: BasePart?
+                or model:FindFirstChild("LeftArm", true) :: BasePart?
             label = "Arms"
         elseif bone == "legs" then
             targetPart = model:FindFirstChild("RightUpperLeg", true) :: BasePart?
                 or model:FindFirstChild("RightLeg", true) :: BasePart?
                 or model:FindFirstChild("LeftUpperLeg", true) :: BasePart?
+                or model:FindFirstChild("LeftLeg", true) :: BasePart?
             label = "Legs"
         end
 
+        -- 2. Fallbacks de partes estruturais principais
         if not targetPart then
-            targetPart = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart", true) :: BasePart? or model:FindFirstChildWhichIsA("BasePart", true)
-            if targetPart then label = targetPart.Name end
+            targetPart = model.PrimaryPart
+                or model:FindFirstChild("HumanoidRootPart", true) :: BasePart?
+                or model:FindFirstChild("Head", true) :: BasePart?
+                or model:FindFirstChild("Torso", true) :: BasePart?
+                or model:FindFirstChildWhichIsA("BasePart", true)
+            if targetPart then
+                label = targetPart.Name
+            end
         end
 
         if targetPart then
             return targetPart.Position, targetPart, label
         end
 
+        -- 3. Resolução Universal Invariante: Centro de massa geométrico via :GetPivot()
         local ok, pivot = pcall(function() return model:GetPivot() end)
-        if ok and pivot then return pivot.Position, nil, "Pivot" end
+        if ok and pivot then
+            return pivot.Position, nil, "Pivot"
+        end
+
         return nil, nil, "None"
     end
 
-    function InstanceDetector:ScanCandidates(teamCheck: boolean?): { Instance }
+    -- Varredura Espacial Desacoplada com Debounce
+    function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boolean?): { Instance }
         local now = os.clock()
-        if (now - self.LastScanTime < self.ScanInterval) and #self.CandidatePool > 0 then
+        if not forceRescan and (now - self.LastScanTime < self.ScanInterval) and #self.CandidatePool > 0 then
+            local verified: { Instance } = {}
+            for _, cand in ipairs(self.CandidatePool) do
+                if self:IsValidTarget(cand, teamCheck) then
+                    table.insert(verified, cand)
+                end
+            end
+            self.CandidatePool = verified
             return self.CandidatePool
         end
+
         self.LastScanTime = now
         local newPool: { Instance } = {}
         local seen: { [Instance]: boolean } = {}
 
         local function Ingest(inst: Instance)
             if not inst then return end
+            -- Normaliza para a raiz da entidade (Model) se fizer parte de um personagem/NPC
             local targetEntity = inst
             if inst:IsA("BasePart") and inst.Parent and inst.Parent:IsA("Model") and inst.Parent ~= Workspace then
                 local parentModel = inst.Parent :: Model
@@ -435,10 +956,10 @@ do
             end
         end
 
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer and p.Character then Ingest(p.Character) end
-        end
+        -- 1. (Removido) Personagens de jogadores reais NUNCA são candidatos: o conjunto
+        --    de alvos é restrito a manequins/NPCs sintéticos autorizados (ver IsValidTarget).
 
+        -- 2. Pastas estruturadas de NPCs / Inimigos (varredura plana de 1 nível para evitar N^2 partes)
         for _, folderName in ipairs(self.SearchFolders) do
             local container = Workspace:FindFirstChild(folderName)
             if container then
@@ -448,6 +969,7 @@ do
             end
         end
 
+        -- 3. CollectionService Tags (NPCs registrados por tag)
         for _, tag in ipairs(self.KnownTags) do
             local okTagged, taggedList = pcall(function() return CollectionService:GetTagged(tag) end)
             if okTagged and taggedList then
@@ -483,6 +1005,7 @@ do
         return self.CandidatePool
     end
 
+    -- Filtro de Distância (Magnitude), Ângulo e Prioridades (Crosshair, Distância, Menor Vida)
     function InstanceDetector:FindBestCandidate(
         originPos: Vector3,
         camLookVector: Vector3,
@@ -505,17 +1028,21 @@ do
         local mode = priorityMode or "Crosshair"
         local now = os.clock()
         local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
-        local fovRadiusLimit = (maxFovDeg / 2.0)
+        local fovRadiusLimit = (maxFovDeg / 2.0) -- Raio angular relativo ao retículo da tela
 
         for _, obj in ipairs(candidates) do
             local pos, _, label = self:ResolvePivotPosition(obj, preferredBone)
             if pos then
                 local displacement = (pos - originPos)
                 local dist = displacement.Magnitude
+
+                -- Filtro de Raio com guarda de singularidade
                 if dist <= maxRadius and dist >= 0.05 then
                     local dir = displacement / dist
                     local dot = math.clamp(camLookVector:Dot(dir), -1.0, 1.0)
                     local angleDeg = math.deg(math.acos(dot))
+
+                    -- Filtro de Campo de Visão (FOV) estritamente alinhado com o raio do FOV Circle
                     if angleDeg <= fovRadiusLimit then
                         local hum = obj:FindFirstChildOfClass("Humanoid") or (obj:IsA("Model") and obj:FindFirstChildWhichIsA("Humanoid", true))
                         local health = hum and hum.Health or 100
@@ -529,11 +1056,19 @@ do
                             score = angleDeg
                         end
 
+                        -- Histerese: o alvo atual recebe score * 0.85 (15% de vantagem). Como
+                        -- score >= 0, um desafiante só vence se score_c < 0.85 * score_atual, ou seja,
+                        -- precisa ser >= 15% melhor. Ex.: atual 10° -> efetivo 8.5°; desafiante 9° perde, 8° vence.
                         if isStickyActive and obj == self.LockedTarget then
                             score = score * 0.85
                         end
 
-                        if score < bestScore then
+                        -- Desempate determinístico: menor score; em empate, menor nome completo.
+                        local better = score < bestScore
+                        if not better and score == bestScore and bestTarget ~= nil then
+                            better = obj:GetFullName() < (bestTarget :: Instance):GetFullName()
+                        end
+                        if better then
                             bestScore = score
                             bestTarget = obj
                             bestPos = pos
@@ -559,12 +1094,36 @@ do
 end
 
 -- =========================================================================
--- [3] MÓDULO: VectorTracker (Cinemática Avançada & Predição)
+-- MÓDULO: VectorTracker.lua
 -- =========================================================================
 local VectorTracker = {}
-VectorTracker.__index = VectorTracker
 do
+    -- =========================================================================
+    -- VectorTracker.lua
+    -- Pilar 2: Motor de Rotação, Interpolação Vetorial, Trajetória e Silent Aim
+    -- CFrame.lookAt com Lerp contínuo independente de framerate (Exponential Decay),
+    -- Proteção Epsilon (1e-4), Jitter Orgânico Perlin Noise, Clamp de Velocidade Angular
+    -- e Cálculo de Trajetória Desacoplada (Silent Aim Simulation Rig)
+    -- =========================================================================
+
+    local Workspace = game:GetService("Workspace")
+    local Debris = game:GetService("Debris")
+
+    VectorTracker.__index = VectorTracker
+
+    -- Constante de tolerância estrita contra divisão por zero e NaNs
     local EPSILON = 1e-4
+
+    type TrackingTelemetry = {
+        Direction: Vector3,
+        Distance: number,
+        AngularErrorDeg: number,
+        AngularVelocityDeg: number,
+        TargetCFrame: CFrame,
+        SmoothedCFrame: CFrame,
+        IsObstructed: boolean,
+        Mode: string
+    }
 
     function VectorTracker.new(filterInstances: { Instance }?)
         local self = setmetatable({}, VectorTracker)
@@ -573,6 +1132,8 @@ do
         self.TrackingActive = false
         self.LastRawCamRotation = nil :: CFrame?
         self.PreviousLookVector = Vector3.zAxis
+        self.PreviousTime = os.clock()
+        self.PreviousAngularVelocity = 0
         self.NoiseSeed = math.random(1000, 9999)
         self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Instance]: { pos: Vector3, time: number, vel: Vector3 } }
 
@@ -582,6 +1143,7 @@ do
         rayParams.IgnoreWater = true
         rayParams.RespectCanCollide = true
         self.RayParams = rayParams
+
         return self
     end
 
@@ -591,41 +1153,119 @@ do
         self.LastRawCamRotation = nil
     end
 
+    -- Libera por completo o controle da câmera: após Release() o tracker não possui
+    -- nenhum estado acumulado e o chamador NÃO deve mais escrever em camera.CFrame.
+    -- (O CameraModule do Roblox reassume o controle no frame seguinte.)
+    function VectorTracker:Release()
+        self:ResetTracking()
+        self.PreviousLookVector = Vector3.zAxis
+        self.PreviousAngularVelocity = 0
+    end
+
     function VectorTracker:SetFilterInstances(instances: { Instance })
         self.RayParams.FilterDescendantsInstances = instances
     end
 
-    function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): boolean
-        local displacement = (targetPos - originPos)
+    type LosResult = {
+        Status: string,        -- "VISIBLE" | "BLOCKED" | "INVALID"
+        Reason: string,        -- causa legível
+        BlockerName: string?,  -- objeto responsável pela obstrução
+        BlockerPart: BasePart?,
+        HitDistance: number?,  -- distância origem -> colisão (studs)
+        QueryDistance: number, -- distância origem -> destino
+    }
+
+    local function IsFiniteVec(v: Vector3): boolean
+        return v.X == v.X and v.Y == v.Y and v.Z == v.Z
+            and math.abs(v.X) ~= math.huge and math.abs(v.Y) ~= math.huge and math.abs(v.Z) ~= math.huge
+    end
+
+    -- Política de LOS (documentada):
+    --  * RespectCanCollide = true: partes com CanCollide=false (decoração, triggers, acessórios
+    --    não colidíveis) NÃO bloqueiam. Barreiras INVISÍVEIS com CanCollide=true BLOQUEIAM
+    --    (são colisores de teste legítimos); Transparency NÃO é critério.
+    --  * IgnoreWater = true: água não bloqueia.
+    --  * O próprio alvo (e descendentes) conta como VISIBLE; o filtro Exclude cobre o modelo de teste/jogador local.
+    --  * Colisão a < END_TOLERANCE studs do ponto final é tratada como atingir o destino (VISIBLE).
+    --  * Entrada não finita, origem == destino ou destino removido => INVALID (nunca VISIBLE).
+    local END_TOLERANCE = 0.8
+
+    function VectorTracker:EvaluateLineOfSight(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): LosResult
+        if typeof(originPos) ~= "Vector3" or typeof(targetPos) ~= "Vector3"
+            or not IsFiniteVec(originPos) or not IsFiniteVec(targetPos) then
+            return { Status = "INVALID", Reason = "Posição não finita ou ausente", QueryDistance = 0 }
+        end
+        if targetInstance ~= nil and (targetInstance.Parent == nil or not targetInstance:IsDescendantOf(game)) then
+            return { Status = "INVALID", Reason = "Destino removido da árvore", QueryDistance = 0 }
+        end
+
+        local displacement = targetPos - originPos
         local dist = displacement.Magnitude
-        if dist < EPSILON then return false end
-        local dir = displacement / dist
-        local result = Workspace:Raycast(originPos, dir * dist, self.RayParams)
-        if not result then return false end
-
-        if targetInstance and result.Instance then
-            if result.Instance == targetInstance or result.Instance:IsDescendantOf(targetInstance) then
-                return false
-            end
+        if dist < EPSILON then
+            return { Status = "INVALID", Reason = "Origem e destino coincidentes", QueryDistance = dist }
         end
 
-        if result.Instance then
-            if result.Instance.CanCollide == false or result.Instance.Transparency >= 0.95 then
-                return false
-            end
+        local ok, result = pcall(function()
+            return Workspace:Raycast(originPos, displacement, self.RayParams)
+        end)
+        if not ok then
+            return { Status = "INVALID", Reason = "Raycast falhou: " .. tostring(result), QueryDistance = dist }
+        end
+        if not result then
+            return { Status = "VISIBLE", Reason = "Nenhuma colisão no trajeto", QueryDistance = dist }
         end
 
-        if (result.Position - targetPos).Magnitude < 0.8 then
-            return false
+        local hit = result.Instance
+        local hitDist = (result.Position - originPos).Magnitude
+        if targetInstance and (hit == targetInstance or hit:IsDescendantOf(targetInstance)) then
+            return { Status = "VISIBLE", Reason = "Raio atingiu o próprio alvo", HitDistance = hitDist, QueryDistance = dist }
         end
+        if (result.Position - targetPos).Magnitude < END_TOLERANCE then
+            return { Status = "VISIBLE", Reason = "Colisão dentro da tolerância do ponto final", HitDistance = hitDist, QueryDistance = dist }
+        end
+        return {
+            Status = "BLOCKED",
+            Reason = hit.Transparency >= 0.95 and "Barreira invisível colidível" or "Obstrução sólida",
+            BlockerName = hit:GetFullName(),
+            BlockerPart = hit,
+            HitDistance = hitDist,
+            QueryDistance = dist,
+        }
+    end
 
-        return true
+    -- Histórico limitado de consultas LOS (para a aba Line of Sight)
+    VectorTracker.LosHistoryLimit = 50
+    function VectorTracker:RecordLos(result: LosResult, targetName: string?)
+        local history = self.LosHistory
+        if not history then
+            history = {}
+            self.LosHistory = history
+        end
+        self.LastLos = result
+        table.insert(history, {
+            Time = os.clock(), Target = targetName or "?", Status = result.Status,
+            Reason = result.Reason, Blocker = result.BlockerName, HitDistance = result.HitDistance,
+        })
+        while #history > math.max(1, self.LosHistoryLimit or VectorTracker.LosHistoryLimit) do
+            table.remove(history, 1)
+        end
+    end
+
+    function VectorTracker:ClearLosHistory()
+        self.LosHistory = {}
+        self.LastLos = nil
+    end
+
+    -- Compatibilidade: true somente se BLOCKED comprovado (INVALID não é tratado como obstrução)
+    function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): boolean
+        return self:EvaluateLineOfSight(originPos, targetPos, targetInstance).Status == "BLOCKED"
     end
 
     function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
         local now = os.clock()
         local cached = self.VelocityCache[inst]
         local vel = Vector3.zero
+
         if cached then
             local dt = (now - cached.time)
             if dt > 0.001 and dt < 0.3 then
@@ -634,16 +1274,21 @@ do
                 vel = cached.vel
             end
         end
+
         self.VelocityCache[inst] = { pos = currentPos, time = now, vel = vel }
         return vel
     end
 
     function VectorTracker:ComputeLead(targetPos: Vector3, targetVel: Vector3, eyePos: Vector3, projSpeed: number, enabled: boolean): Vector3
-        if not enabled or projSpeed <= 0 then return targetPos end
+        if not enabled or projSpeed <= 0 then
+            return targetPos
+        end
         local dist = (targetPos - eyePos).Magnitude
-        return targetPos + (targetVel * (dist / projSpeed))
+        local timeToHit = dist / projSpeed
+        return targetPos + (targetVel * timeToHit)
     end
 
+    -- Cálculo de Rotação Suavizada com Curva Intuitiva e Limite de Velocidade Angular
     function VectorTracker:ComputeSmoothRotation(
         currentCFrame: CFrame,
         targetPosition: Vector3,
@@ -658,12 +1303,22 @@ do
         local originPos = currentCFrame.Position
         local displacement = (targetPosition - originPos)
         local distance = displacement.Magnitude
-        if distance < EPSILON then return currentCFrame, 0, 0 end
 
-        local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
+        -- PREVENÇÃO DE NaN: Aborta caso a distância seja menor que o limiar EPSILON
+        if distance < EPSILON then
+            return currentCFrame, 0, 0
+        end
+
+        -- dt inválido (nil, NaN, <= 0) cai no padrão de 60Hz; dt grande é limitado
+        local rawDt = (type(dt) == "number" and dt == dt and dt > 0) and dt or 0.0166
+        local safeDt = math.clamp(rawDt, 0.0001, 0.1)
+
+        -- Matriz de Orientação Alvo via CFrame.lookAt
         local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
         local rawCamRot = currentCFrame.Rotation
 
+        -- Determina rotação base: se o tracker estiver ativo e já possuir rotação acumulada,
+        -- avança a partir do estado acumulado e incorpora qualquer delta de rotação do mouse do usuário
         local startRotation: CFrame
         if self.TrackingActive and self.CurrentRotation then
             local userDelta = CFrame.identity
@@ -677,11 +1332,13 @@ do
         end
         self.LastRawCamRotation = rawCamRot
 
+        -- Normalização e cálculo angular relativo ao startRotation
         local forward = startRotation.LookVector
         local unitDirection = displacement / distance
         local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
         local angularErrorDeg = math.deg(math.acos(dot))
 
+        -- Se o erro for insignificante (< 0.04°), mantém a rotação estabilizada sem micro-trepidações
         if angularErrorDeg < 0.04 then
             local safeCFrame = CFrame.new(originPos) * startRotation
             self.CurrentRotation = startRotation
@@ -689,20 +1346,25 @@ do
             return safeCFrame, angularErrorDeg, 0
         end
 
+        -- Curva de aceleração Hermite Smoothstep com expoente configurável
         local normErr = math.clamp(angularErrorDeg / 70.0, 0.0, 1.0)
         local hermiteFactor = normErr * normErr * (3.0 - 2.0 * normErr)
-        hermiteFactor = math.pow(hermiteFactor, accelExponent or 1.25)
+        local exponent = accelExponent or 1.25
+        hermiteFactor = math.pow(hermiteFactor, exponent)
 
+        -- Mapeamento semântico correto: Menor Smoothing = Maior velocidade de resposta
         local safeSmooth = math.clamp(smoothingFactor or 0.15, 0.01, 1.0)
         local responseRate = 1.0 / safeSmooth
         local k = responseRate * (0.65 + 0.35 * hermiteFactor)
         local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
+        -- Atenuação suave na zona de micro-alinhamento (0.04° a 0.25°)
         if angularErrorDeg < 0.25 then
             local deadzoneWeight = math.clamp((angularErrorDeg - 0.04) / 0.21, 0.05, 1.0)
             dynamicAlpha = dynamicAlpha * deadzoneWeight
         end
 
+        -- Aplica clamp de velocidade angular máxima se requisitado
         if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
             local maxDegThisFrame = maxAngularVel * safeDt
             if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
@@ -710,11 +1372,13 @@ do
             end
         end
 
+        -- Interpolação orientada pura (Lerp esférico da rotação)
         local nextRotation = startRotation:Lerp(targetRotation.Rotation, dynamicAlpha)
         self.CurrentRotation = nextRotation
 
         local smoothedCFrame = CFrame.new(originPos) * nextRotation
 
+        -- Injeção de Jitter Perlin Noise caso habilitado
         if simulateJitter and intensity and intensity > 0 then
             local now = os.clock()
             local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.20
@@ -725,6 +1389,7 @@ do
             end
         end
 
+        -- Cálculo da velocidade angular instantânea em graus/segundo
         local newLook = smoothedCFrame.LookVector
         local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
         local deltaAngleDeg = math.deg(math.acos(deltaDot))
@@ -732,9 +1397,11 @@ do
 
         self.PreviousLookVector = newLook
         self.CurrentCFrame = smoothedCFrame
+
         return smoothedCFrame, angularErrorDeg, angularVelocity
     end
 
+    -- Modo Snap Instantâneo (1 frame) para testes de Anomaly Detection
     function VectorTracker:ComputeSnapRotation(currentCFrame: CFrame, targetPosition: Vector3, dt: number): (CFrame, number, number)
         local originPos = currentCFrame.Position
         local displacement = (targetPosition - originPos)
@@ -750,6 +1417,11 @@ do
         return targetRotation, 0, angularVelocity
     end
 
+    -- =========================================================================
+    -- SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO E TELEMETRIA)
+    -- =========================================================================
+
+    -- Avaliação geométrica do vetor de Silent Aim (Cálculo Puro sem Sorteio de Frame)
     function VectorTracker:ComputeSilentAimVector(
         cameraCFrame: CFrame,
         targetPosition: Vector3,
@@ -770,10 +1442,12 @@ do
         local dot = math.clamp(camForward:Dot(decoupledDirection), -1.0, 1.0)
         local discrepancyAngleDeg = math.deg(math.acos(dot))
 
+        -- Verifica se o alvo está dentro do cone angular de atuação do Silent Aim
         if discrepancyAngleDeg > maxFovDeg then
             return false, camForward, discrepancyAngleDeg
         end
 
+        -- Sorteio opcional (usado quando invocado em evento pontual)
         if hitChancePercent ~= nil then
             local chance = math.clamp(hitChancePercent, 0.0, 100.0)
             if (math.random() * 100.0) > chance then
@@ -784,14 +1458,7 @@ do
         return true, decoupledDirection, discrepancyAngleDeg
     end
 
-    function VectorTracker:SimulateShot(
-        cameraCFrame: CFrame,
-        targetPosition: Vector3,
-        maxFovDeg: number,
-        hitChancePercent: number,
-        isObstructed: boolean?,
-        targetInstance: Instance?
-    ): {
+    type ShotSimulationResult = {
         Fired: boolean,
         HitRegistered: boolean,
         DiscrepancyAngleDeg: number,
@@ -801,6 +1468,16 @@ do
         InFov: boolean,
         IsObstructed: boolean
     }
+
+    -- Execução de Disparo Simulado Controlado (Disparado apenas por evento/trigger de tiro)
+    function VectorTracker:SimulateShot(
+        cameraCFrame: CFrame,
+        targetPosition: Vector3,
+        maxFovDeg: number,
+        hitChancePercent: number,
+        isObstructed: boolean?,
+        targetInstance: Instance?
+    ): ShotSimulationResult
         local muzzlePos = cameraCFrame.Position + cameraCFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
         local displacement = (targetPosition - muzzlePos)
         local dist = displacement.Magnitude
@@ -833,6 +1510,7 @@ do
                 hit = true
                 shotDir = directDir
             else
+                -- Dispersão sutil fora do alvo em caso de erro probabilístico
                 local missAngle = math.rad(math.random(3, 8))
                 local randAxis = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
                 shotDir = CFrame.fromAxisAngle(randAxis, missAngle):VectorToWorldSpace(directDir)
@@ -853,6 +1531,7 @@ do
         }
     end
 
+    -- Visualizador de Traçador (Tracer 3D Neon com Limpeza de Debris)
     function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
         local ok, _ = pcall(function()
             local dist = (targetPos - origin).Magnitude
@@ -885,11 +1564,20 @@ do
 end
 
 -- =========================================================================
--- [4] MÓDULO: VisualOverlayRenderer (Realce ESP Chams)
+-- MÓDULO: VisualOverlayRenderer.lua
 -- =========================================================================
 local VisualOverlayRenderer = {}
-VisualOverlayRenderer.__index = VisualOverlayRenderer
 do
+    -- VisualOverlayRenderer.lua
+    -- Pilar 3: Renderização de Realce (UI & Overlay Engine)
+    -- Highlights com DepthMode AlwaysOnTop, Preservação de Camadas de Z-Index e Quota de Memória
+
+    local CoreGuiService = game:GetService("CoreGui")
+    local Players = game:GetService("Players")
+    local Workspace = game:GetService("Workspace")
+
+    VisualOverlayRenderer.__index = VisualOverlayRenderer
+
     local MAX_ACTIVE_HIGHLIGHTS = 16
 
     function VisualOverlayRenderer.new()
@@ -904,11 +1592,14 @@ do
         local host: Instance = CoreGuiService
         local ok, _ = pcall(function() return CoreGuiService:GetChildren() end)
         if not ok then
-            local pGui = LocalPlayer and LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            local pGui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChildOfClass("PlayerGui")
             host = pGui or Workspace
         end
+
         local existing = host:FindFirstChild("DeepHat_ESP_Container")
-        if existing and existing:IsA("Folder") then return existing end
+        if existing and existing:IsA("Folder") then
+            return existing
+        end
 
         local folder = Instance.new("Folder")
         folder.Name = "DeepHat_ESP_Container"
@@ -916,7 +1607,13 @@ do
         return folder
     end
 
-    function VisualOverlayRenderer:UpdateTargetHighlight(target: Instance, isObstructed: boolean, isPrimary: boolean)
+    function VisualOverlayRenderer:UpdateTargetHighlight(
+        target: Instance,
+        isObstructed: boolean,
+        isPrimaryFocus: boolean,
+        customColor: Color3?,
+        customTransparency: number?
+    )
         if not target or not target:IsDescendantOf(game) then
             self:ClearTarget(target)
             return
@@ -944,10 +1641,12 @@ do
                 inst.Parent = self.Container
                 return inst
             end)
+
             if ok and newHl then
                 hl = newHl
                 self.ActiveHighlights[target] = hl
 
+                -- Limpeza imediata no ciclo de vida da instância adornee
                 pcall(function()
                     local conn: RBXScriptConnection? = nil
                     conn = target.AncestryChanged:Connect(function(_, parent)
@@ -967,14 +1666,25 @@ do
             pcall(function()
                 hl.Adornee = target
                 hl.Enabled = true
-                hl.FillTransparency = isPrimary and 0.35 or 0.65
+                local fillTrans = customTransparency or (isPrimaryFocus and 0.35 or 0.65)
+                hl.FillTransparency = fillTrans
                 hl.OutlineTransparency = 0.05
-                hl.FillColor = isObstructed and Color3.fromRGB(240, 50, 50) or Color3.fromRGB(46, 230, 110)
-                hl.OutlineColor = isObstructed and Color3.fromRGB(255, 180, 180) or Color3.fromRGB(200, 255, 200)
+
+                if customColor then
+                    hl.FillColor = customColor
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                elseif isPrimaryFocus then
+                    hl.FillColor = isObstructed and Color3.fromRGB(255, 45, 45) or Color3.fromRGB(46, 230, 110)
+                    hl.OutlineColor = isObstructed and Color3.fromRGB(255, 180, 180) or Color3.fromRGB(200, 255, 200)
+                else
+                    hl.FillColor = isObstructed and Color3.fromRGB(180, 70, 70) or Color3.fromRGB(50, 140, 230)
+                    hl.OutlineColor = Color3.fromRGB(240, 240, 240)
+                end
             end)
         end
     end
 
+    -- Sincronização em Lote de ESP com Limpeza Automática de Alvos Antigos (Zero Vazamento)
     function VisualOverlayRenderer:SyncBatchHighlights(
         candidates: { Instance }?,
         primaryTarget: Instance?,
@@ -982,11 +1692,13 @@ do
     )
         local activeBatch: { [Instance]: boolean } = {}
 
+        -- 1. Realce do Alvo Primário Focado
         if primaryTarget and primaryTarget:IsDescendantOf(game) then
             self:UpdateTargetHighlight(primaryTarget, isPrimaryObstructed, true)
             activeBatch[primaryTarget] = true
         end
 
+        -- 2. Realce de Alvos Secundários do Pool (limitado para preservar FPS)
         if candidates then
             local maxSecondary = math.min(#candidates, MAX_ACTIVE_HIGHLIGHTS - 1)
             local count = 0
@@ -1000,6 +1712,7 @@ do
             end
         end
 
+        -- 3. Limpeza Automática de Qualquer Highlight que não esteja mais no lote ativo
         for inst, _ in pairs(self.ActiveHighlights) do
             if not activeBatch[inst] then
                 self:ClearTarget(inst)
@@ -1010,11 +1723,15 @@ do
     function VisualOverlayRenderer:ClearTarget(target: Instance?)
         if not target then return end
         local hl = self.ActiveHighlights[target]
-        if hl then pcall(function() hl:Destroy() end) end
+        if hl then
+            pcall(function() hl:Destroy() end)
+        end
         self.ActiveHighlights[target] = nil
 
         local conn = self.CleanupConnections[target]
-        if conn then pcall(function() conn:Disconnect() end) end
+        if conn then
+            pcall(function() conn:Disconnect() end)
+        end
         self.CleanupConnections[target] = nil
     end
 
@@ -1031,10 +1748,201 @@ do
 end
 
 -- =========================================================================
--- [5] MÓDULO EMBUTIDO: DashboardGUI (Interface 8 Abas + Watchdog Integrado)
+-- MÓDULO: EngineCore.lua
+-- =========================================================================
+local Engine = {}
+do
+    -- =========================================================================
+    -- EngineCore.lua
+    -- Motor de Avaliação Cinemática e Detecção de Anomalias de Comportamento
+    -- Usado para Calibração de Anti-Cheat e Validação de Tolerância Heurística
+    -- =========================================================================
+
+
+    type KinematicMetrics = {
+        angularVelocity: number,       -- Velocidade angular (°/s)
+        singleFrameDeltaDeg: number?,  -- Variação angular no último frame (graus)
+        isSnap: boolean?,              -- Rotação instantânea
+        isObstructed: boolean?,        -- Linha de visada bloqueada
+        targetDistance: number?,       -- Distância até o alvo (studs)
+        consecutiveOccludedFrames: number?, -- Frames seguidos mirando através da parede
+        accelerationJitter: number?,   -- Desvio padrão de aceleração
+        linearSpeed: number?,          -- Velocidade linear (studs/s)
+        decoupledAngleDeg: number?,    -- Discrepância entre LookVector da câmera e vetor do projétil (Silent Aim)
+    }
+
+    type SuspicionReport = {
+        totalScore: number,            -- 0 a 100%
+        category: string,              -- "LIMPO", "SUSPEITO", "ANOMALIA_CRITICA", "INSUFICIENTE"
+        flaggedRules: { string },
+        anomalies: { string },         -- alias de flaggedRules (mesma tabela) p/ consumidores antigos e novos
+        explanations: { string },      -- justificativa de cada regra acionada (limiar e valor medido)
+        unavailableMetrics: { string },-- telemetria ausente (NUNCA tratada como zero)
+        evaluatedRules: number,        -- regras que puderam ser avaliadas com dados reais
+        sampleCount: number?,
+    }
+
+    -- Amostra mínima para classificar; abaixo disso a categoria é "INSUFICIENTE".
+    Engine.MIN_SAMPLES = 5
+    -- Limites (fonte única; os testes consultam estes valores)
+    Engine.Thresholds = {
+        SnapCritical = 30.0, SnapSudden = 18.0,
+        AngVelSuper = 800.0, AngVelHigh = 450.0,
+        OccludedPersistent = 15, OccludedBrief = 5,
+        LinearSpeed = 28.0,
+        DecoupledCritical = 35.0, DecoupledHigh = 15.0,
+        ScoreCritical = 75, ScoreSuspect = 40,
+    }
+
+    -- Perfis de Teste para Simulação Controlada
+    Engine.Profiles = {
+        ["NORMAL"] = {
+            SpeedMult = 1.0,
+            AimSmooth = 0.15,
+            SnapChance = 0.02,
+            WalltrackProb = 0.0,
+            Precision = 0.95,
+            MaxExpectedAngVel = 260.0
+        },
+        ["LEVE"] = {
+            SpeedMult = 0.8,
+            AimSmooth = 0.28,
+            SnapChance = 0.0,
+            WalltrackProb = 0.0,
+            Precision = 0.90,
+            MaxExpectedAngVel = 180.0
+        },
+        ["AGRESSIVO"] = {
+            SpeedMult = 1.6,
+            AimSmooth = 0.01,
+            SnapChance = 0.85,
+            WalltrackProb = 0.65,
+            Precision = 0.99,
+            MaxExpectedAngVel = 1200.0
+        }
+    }
+
+    -- Matriz de Avaliação de Suspeita Baseada em Física (independente de UI)
+    -- Campo ausente (nil) => regra NÃO avaliada e listada em unavailableMetrics; 0 => medição válida.
+    function Engine:CalculateSuspicion(metrics: KinematicMetrics): SuspicionReport
+        local T = Engine.Thresholds
+        local score = 0
+        local flags: { string } = {}
+        local why: { string } = {}
+        local missing: { string } = {}
+        local evaluated = 0
+        local m: any = metrics or {}
+
+        local function valid(v: any): boolean
+            return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+        end
+        local function flag(name: string, pts: number, reason: string)
+            score = score + pts
+            table.insert(flags, name)
+            table.insert(why, string.format("%s: %s (+%d)", name, reason, pts))
+        end
+
+        -- 1. Snap instantâneo
+        local delta: number? = nil
+        if valid(m.singleFrameDeltaDeg) then delta = m.singleFrameDeltaDeg
+        elseif m.isSnap ~= nil then delta = m.isSnap and 45 or 0 end
+        if delta ~= nil then
+            evaluated += 1
+            if delta > T.SnapCritical then
+                flag("ANOMALIA_SNAP", 45, string.format("delta %.1f° > %.1f°", delta, T.SnapCritical))
+            elseif delta > T.SnapSudden then
+                flag("ROTACAO_SUBITA", 20, string.format("delta %.1f° > %.1f°", delta, T.SnapSudden))
+            end
+        else table.insert(missing, "singleFrameDeltaDeg") end
+
+        -- 2. Velocidade angular
+        if valid(m.angularVelocity) then
+            evaluated += 1
+            local v = m.angularVelocity
+            if v > T.AngVelSuper then
+                flag("VELOCIDADE_SUPERHUMANA", 35, string.format("%.1f °/s > %.1f", v, T.AngVelSuper))
+            elseif v > T.AngVelHigh then
+                flag("VELOCIDADE_ELEVADA", 15, string.format("%.1f °/s > %.1f", v, T.AngVelHigh))
+            end
+        else table.insert(missing, "angularVelocity") end
+
+        -- 3. Mira através de oclusão
+        local occluded: number? = nil
+        if valid(m.consecutiveOccludedFrames) then occluded = m.consecutiveOccludedFrames
+        elseif m.isObstructed ~= nil then occluded = m.isObstructed and 10 or 0 end
+        if occluded ~= nil then
+            evaluated += 1
+            if occluded >= T.OccludedPersistent then
+                flag("TRACKING_OCLUSO_PERSISTENTE", 40, string.format("%d frames >= %d", occluded, T.OccludedPersistent))
+            elseif occluded >= T.OccludedBrief then
+                flag("VISADA_OBSTRUIDA", 20, string.format("%d frames >= %d", occluded, T.OccludedBrief))
+            end
+        else table.insert(missing, "consecutiveOccludedFrames") end
+
+        -- 4. Velocidade linear (sem valor padrão fictício)
+        if valid(m.linearSpeed) then
+            evaluated += 1
+            if m.linearSpeed > T.LinearSpeed then
+                flag("DESLOCAMENTO_ANOMALO", 30, string.format("%.1f studs/s > %.1f", m.linearSpeed, T.LinearSpeed))
+            end
+        else table.insert(missing, "linearSpeed") end
+
+        -- 5. Vetor de disparo desacoplado
+        if valid(m.decoupledAngleDeg) then
+            evaluated += 1
+            local d = m.decoupledAngleDeg
+            if d > T.DecoupledCritical then
+                flag("SILENT_AIM_CRITICO", 65, string.format("discrepância %.1f° > %.1f°", d, T.DecoupledCritical))
+            elseif d > T.DecoupledHigh then
+                flag("DISCREPANCIA_SILENT_AIM", 45, string.format("discrepância %.1f° > %.1f°", d, T.DecoupledHigh))
+            end
+        else table.insert(missing, "decoupledAngleDeg") end
+
+        local finalScore = math.clamp(score, 0, 100)
+        local category = "LIMPO"
+        local sampleCount = (metrics :: any).sampleCount
+        if evaluated == 0 or (valid(sampleCount) and sampleCount < Engine.MIN_SAMPLES) then
+            category = "INSUFICIENTE"
+        elseif finalScore >= T.ScoreCritical then
+            category = "ANOMALIA_CRITICA"
+        elseif finalScore >= T.ScoreSuspect then
+            category = "SUSPEITO"
+        end
+
+        return {
+            totalScore = finalScore,
+            category = category,
+            flaggedRules = flags,
+            anomalies = flags,
+            explanations = why,
+            unavailableMetrics = missing,
+            evaluatedRules = evaluated,
+            sampleCount = valid(sampleCount) and sampleCount or nil,
+        }
+    end
+end
+
+-- =========================================================================
+-- MÓDULO: DashboardGUI.lua
 -- =========================================================================
 local DashboardGUI = {}
 do
+    -- =========================================================================
+    -- DashboardGUI.lua
+    -- Interface Profissional de Simulação Cinemática e Diagnósticos de Detecção
+    -- Design: Dark Mode Fosco com Red Accents (#E02B36), Abas Modulares e Watchdog de Fundo
+    -- =========================================================================
+
+    local Players = game:GetService("Players")
+    local UserInputService = game:GetService("UserInputService")
+    local RunService = game:GetService("RunService")
+    local Workspace = game:GetService("Workspace")
+    local CoreGuiService = game:GetService("CoreGui")
+
+
+    DashboardGUI.__index = DashboardGUI
+
+    -- [DESIGN SYSTEM & TOKENS VISUAIS]
     local THEME = {
         BG_WINDOW    = Color3.fromRGB(11, 12, 16),
         BG_SIDEBAR   = Color3.fromRGB(16, 18, 23),
@@ -1046,22 +1954,41 @@ do
         TEXT_MUTED   = Color3.fromRGB(135, 144, 160),
         ACCENT_RED   = Color3.fromRGB(224, 43, 54),
         ACCENT_HOVER = Color3.fromRGB(255, 65, 75),
+        ACCENT_GLOW  = Color3.fromRGB(90, 20, 25),
         SUCCESS      = Color3.fromRGB(46, 204, 113),
         WARNING      = Color3.fromRGB(241, 196, 15),
         INFO         = Color3.fromRGB(52, 152, 219),
     }
 
+    -- Callbacks de Ação Global
     DashboardGUI.OnStartRequested = nil :: (() -> ())?
     DashboardGUI.OnStopRequested = nil :: (() -> ())?
     DashboardGUI.OnResetRequested = nil :: (() -> ())?
     DashboardGUI.OnSaveRequested = nil :: (() -> ())?
+    DashboardGUI.OnRunLosScenario = nil :: ((string) -> ())?
+    DashboardGUI.OnClearLosHistory = nil :: (() -> ())?
 
+    -- Instâncias Internas
+    local ScreenGuiInstance: ScreenGui? = nil
+    local MainFrameInstance: Frame? = nil
     local FovCircleInstance: Frame? = nil
     local WatchdogBadgeInstance: TextLabel? = nil
     local EventLogListInstance: ScrollingFrame? = nil
-    local TelemetryLabels: { [string]: TextLabel } = {}
-    local PerformanceData = { Fps = 60, PeakAngVel = 0 }
     local unsubscribeGlobal: (() -> ())? = nil
+
+    -- Elementos de Telemetria Dinâmica
+    local TelemetryLabels: { [string]: TextLabel } = {}
+    local LosLabels: { [string]: TextLabel } = {}
+    local DetLabels: { [string]: TextLabel } = {}
+    local LosHistoryList: ScrollingFrame? = nil
+    local LastRenderedLosStamp = -1
+    local ApplyRuntimeConfig: ((string, any) -> ())? = nil
+    local PerformanceData = {
+        Fps = 60,
+        PeakAngVel = 0,
+        LastCheck = os.clock(),
+        ErrorCount = 0,
+    }
 
     local function AddCorner(parent: Instance, radius: number): UICorner
         local corner = Instance.new("UICorner")
@@ -1094,6 +2021,9 @@ do
         return playerGui or Workspace
     end
 
+    -- =========================================================================
+    -- LOG DE DIAGNÓSTICOS EM TEMPO REAL
+    -- =========================================================================
     function DashboardGUI.AddDiagnosticLog(source: string, message: string, level: "INFO" | "WARN" | "OK")
         if not EventLogListInstance or not EventLogListInstance.Parent then return end
 
@@ -1117,22 +2047,33 @@ do
         lbl.TextSize = 10
         lbl.TextColor3 = color
         lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Text = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), source, message)
+        local timeStr = os.date("%H:%M:%S")
+        lbl.Text = string.format("[%s] [%s] %s", timeStr, source, message)
         lbl.Parent = row
 
+        -- Limita em 40 itens na lista
         local children = EventLogListInstance:GetChildren()
         local count = 0
-        for _, ch in ipairs(children) do if ch:IsA("Frame") then count = count + 1 end end
+        for _, ch in ipairs(children) do
+            if ch:IsA("Frame") then count = count + 1 end
+        end
         if count > 40 then
             for _, ch in ipairs(children) do
-                if ch:IsA("Frame") then ch:Destroy() break end
+                if ch:IsA("Frame") then
+                    ch:Destroy()
+                    break
+                end
             end
         end
         EventLogListInstance.CanvasPosition = Vector2.new(0, 99999)
     end
 
+    -- =========================================================================
+    -- CRIAÇÃO PRINCIPAL DO DASHBOARD
+    -- =========================================================================
     function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         local hostParent = parentGui or GetSafeGuiParent()
+
         local existing = hostParent:FindFirstChild("DeepHat_MasterDashboard")
         if existing then existing:Destroy() end
 
@@ -1141,7 +2082,11 @@ do
         screenGui.ResetOnSpawn = false
         screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         screenGui.Parent = hostParent
+        ScreenGuiInstance = screenGui
 
+        -- ---------------------------------------------------------------------
+        -- FOV Overlay na Tela
+        -- ---------------------------------------------------------------------
         local fovCircle = Instance.new("Frame")
         fovCircle.Name = "DeepHat_FovOverlay"
         fovCircle.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1163,6 +2108,9 @@ do
         fovCenterDot.Parent = fovCircle
         AddCorner(fovCenterDot, 2)
 
+        -- ---------------------------------------------------------------------
+        -- Janela Principal
+        -- ---------------------------------------------------------------------
         local mainFrame = Instance.new("Frame")
         mainFrame.Name = "MainFrame"
         mainFrame.Size = UDim2.new(0, 960, 0, 580)
@@ -1174,7 +2122,9 @@ do
         mainFrame.Parent = screenGui
         AddCorner(mainFrame, 10)
         AddStroke(mainFrame, THEME.BORDER, 1.5)
+        MainFrameInstance = mainFrame
 
+        -- Header da Janela
         local header = Instance.new("Frame")
         header.Name = "Header"
         header.Size = UDim2.new(1, 0, 0, 44)
@@ -1183,6 +2133,7 @@ do
         header.Parent = mainFrame
         AddCorner(header, 10)
 
+        -- Arraste da Janela (Draggable)
         local isDragging = false
         local dragStartPos = Vector2.zero
         local frameStartPos = UDim2.new(0.5, 0, 0.5, 0)
@@ -1195,7 +2146,9 @@ do
             end
         end)
         UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then isDragging = false end
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                isDragging = false
+            end
         end)
         UserInputService.InputChanged:Connect(function(input)
             if isDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
@@ -1209,6 +2162,7 @@ do
             end
         end)
 
+        -- Ícone / Marca
         local brandDot = Instance.new("Frame")
         brandDot.Size = UDim2.new(0, 8, 0, 8)
         brandDot.Position = UDim2.new(0, 16, 0.5, -4)
@@ -1227,6 +2181,7 @@ do
         titleLabel.Text = "DEEPHAT SIMULATION SUITE // v6.0 PRO"
         titleLabel.Parent = header
 
+        -- Badge de Watchdog / Status de Saúde em tempo real
         local watchdogBadge = Instance.new("TextLabel")
         watchdogBadge.Size = UDim2.new(0, 240, 0, 24)
         watchdogBadge.Position = UDim2.new(1, -330, 0.5, -12)
@@ -1266,6 +2221,7 @@ do
             mainFrame.Visible = not mainFrame.Visible
         end)
 
+        -- Alternar exibição via teclas Home ou RightShift
         UserInputService.InputBegan:Connect(function(input, gpe)
             if gpe then return end
             if input.KeyCode == Enum.KeyCode.Home or input.KeyCode == Enum.KeyCode.RightShift then
@@ -1273,6 +2229,9 @@ do
             end
         end)
 
+        -- ---------------------------------------------------------------------
+        -- Layout Estrutural: Sidebar (Esquerda) + Área de Conteúdo (Direita)
+        -- ---------------------------------------------------------------------
         local body = Instance.new("Frame")
         body.Size = UDim2.new(1, 0, 1, -94)
         body.Position = UDim2.new(0, 0, 0, 46)
@@ -1293,7 +2252,9 @@ do
         sidebarList.Parent = sidebar
 
         local sidebarPad = Instance.new("UIPadding")
-        sidebarPad.PaddingTop = UDim.new(0, 10); sidebarPad.PaddingLeft = UDim.new(0, 8); sidebarPad.PaddingRight = UDim.new(0, 8)
+        sidebarPad.PaddingTop = UDim.new(0, 10)
+        sidebarPad.PaddingLeft = UDim.new(0, 8)
+        sidebarPad.PaddingRight = UDim.new(0, 8)
         sidebarPad.Parent = sidebar
 
         local mainContent = Instance.new("Frame")
@@ -1306,22 +2267,26 @@ do
         AddCorner(mainContent, 8)
         AddStroke(mainContent, THEME.BORDER, 1)
 
+        -- Páginas das Abas
         local pages: { [string]: ScrollingFrame } = {}
         local tabButtons: { [string]: TextButton } = {}
 
         local tabs = {
-            { Id = "Overview",    Label = "📊 Painel Geral" },
-            { Id = "Camera",      Label = "🎥 Câmera & Vetores" },
-            { Id = "Simulation",  Label = "⚡ Simulação" },
-            { Id = "Vision",      Label = "👁️ Linha de Visão" },
-            { Id = "Hitbox",      Label = "🎯 Mapeamento HitBox" },
-            { Id = "Diagnostics", Label = "🛠️ Diagnósticos" },
-            { Id = "Performance", Label = "📈 Desempenho" },
-            { Id = "Settings",    Label = "⚙️ Configurações" },
+            { Id = "Dashboard",   Label = "▣  Dashboard" },
+            { Id = "Camera",      Label = "◎  Camera / Aim Simulation" },
+            { Id = "Simulation",  Label = "≋  Simulação (parâmetros)" },
+            { Id = "Vision",      Label = "◈  World / ESP" },
+            { Id = "LineOfSight", Label = "⌖  Line of Sight" },
+            { Id = "Hitbox",      Label = "◇  Regiões de Alvo" },
+            { Id = "Diagnostics", Label = "▤  Detection / Telemetry" },
+            { Id = "Performance", Label = "▥  Desempenho" },
+            { Id = "Settings",    Label = "⚙  Configuration" },
         }
 
         local function SwitchTab(tabId: string)
-            for id, page in pairs(pages) do page.Visible = (id == tabId) end
+            for id, page in pairs(pages) do
+                page.Visible = (id == tabId)
+            end
             for id, btn in pairs(tabButtons) do
                 local active = (id == tabId)
                 btn.BackgroundColor3 = active and THEME.ACCENT_RED or THEME.BG_INPUT
@@ -1333,8 +2298,8 @@ do
         for _, t in ipairs(tabs) do
             local btn = Instance.new("TextButton")
             btn.Size = UDim2.new(1, 0, 0, 34)
-            btn.BackgroundColor3 = (t.Id == "Overview") and THEME.ACCENT_RED or THEME.BG_INPUT
-            btn.TextColor3 = (t.Id == "Overview") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            btn.BackgroundColor3 = (t.Id == "Dashboard") and THEME.ACCENT_RED or THEME.BG_INPUT
+            btn.TextColor3 = (t.Id == "Dashboard") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
             btn.Font = Enum.Font.GothamMedium
             btn.TextSize = 11
             btn.TextXAlignment = Enum.TextXAlignment.Left
@@ -1343,8 +2308,12 @@ do
             AddCorner(btn, 5)
 
             tabButtons[t.Id] = btn
-            btn.MouseButton1Click:Connect(function() SwitchTab(t.Id) end)
 
+            btn.MouseButton1Click:Connect(function()
+                SwitchTab(t.Id)
+            end)
+
+            -- Criação do Container da Página
             local page = Instance.new("ScrollingFrame")
             page.Name = "Page_" .. t.Id
             page.Size = UDim2.new(1, 0, 1, 0)
@@ -1353,7 +2322,7 @@ do
             page.ScrollBarImageColor3 = THEME.BORDER_LIGHT
             page.CanvasSize = UDim2.new(0, 0, 0, 0)
             page.AutomaticCanvasSize = Enum.AutomaticSize.Y
-            page.Visible = (t.Id == "Overview")
+            page.Visible = (t.Id == "Dashboard")
             page.Parent = mainContent
 
             local pList = Instance.new("UIListLayout")
@@ -1368,13 +2337,18 @@ do
             pages[t.Id] = page
         end
 
+        -- Sincronizadores para Observer
         local syncInputs: { [string]: (number) -> () } = {}
 
+        -- ---------------------------------------------------------------------
+        -- Construtor de Componente: Slider com Input Numérico Sincronizado
+        -- ---------------------------------------------------------------------
         local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number): Frame
             local span = math.max(maxVal - minVal, 0.0001)
             local safeDefault = tonumber(SimConfig.Get(configKey)) or defaultVal or minVal
 
             local container = Instance.new("Frame")
+            container.Name = "SliderRow_" .. configKey
             container.Size = UDim2.new(1, 0, 0, 48)
             container.BackgroundColor3 = THEME.BG_INPUT
             container.BackgroundTransparency = 0.5
@@ -1427,18 +2401,26 @@ do
             AddCorner(fill, 3)
 
             local isDraggingSlider = false
+
             local function UpdateValue(val: number, fromObserver: boolean?)
                 val = math.clamp(val, minVal, maxVal)
                 val = math.round(val / step) * step
                 local ratio = math.clamp((val - minVal) / span, 0, 1)
                 fill.Size = UDim2.new(ratio, 0, 1, 0)
                 numInput.Text = string.format(step < 1 and "%.2f" or "%d", val)
-                if not fromObserver then SimConfig.Set(configKey, val) end
+                if not fromObserver then
+                    SimConfig.Set(configKey, val)
+                end
             end
 
             numInput.FocusLost:Connect(function()
                 local num = tonumber(numInput.Text)
-                if num then UpdateValue(num) else numInput.Text = string.format(step < 1 and "%.2f" or "%d", tonumber(SimConfig.Get(configKey)) or safeDefault) end
+                if num then
+                    UpdateValue(num)
+                else
+                    local fallback = tonumber(SimConfig.Get(configKey)) or safeDefault
+                    numInput.Text = string.format(step < 1 and "%.2f" or "%d", fallback)
+                end
             end)
 
             track.InputBegan:Connect(function(input)
@@ -1449,9 +2431,13 @@ do
                     UpdateValue(minVal + relX * span)
                 end
             end)
+
             UserInputService.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 then isDraggingSlider = false end
+                if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    isDraggingSlider = false
+                end
             end)
+
             UserInputService.InputChanged:Connect(function(input)
                 if isDraggingSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
                     local trackWidth = math.max(track.AbsoluteSize.X, 1)
@@ -1460,10 +2446,16 @@ do
                 end
             end)
 
-            syncInputs[configKey] = function(newVal: number) UpdateValue(newVal, true) end
+            syncInputs[configKey] = function(newVal: number)
+                UpdateValue(newVal, true)
+            end
+
             return container
         end
 
+        -- ---------------------------------------------------------------------
+        -- Construtor de Componente: Toggle Switch
+        -- ---------------------------------------------------------------------
         local function CreateToggleField(parent: Instance, labelText: string, configKey: string, defaultState: boolean): Frame
             local container = Instance.new("Frame")
             container.Size = UDim2.new(1, 0, 0, 36)
@@ -1507,7 +2499,8 @@ do
             end
 
             toggleBtn.MouseButton1Click:Connect(function()
-                SetToggle(not (SimConfig.Get(configKey) == true))
+                local current = SimConfig.Get(configKey) == true
+                SetToggle(not current)
             end)
 
             SimConfig.Subscribe(configKey, function(val)
@@ -1515,11 +2508,16 @@ do
                 toggleBtn.BackgroundColor3 = state and THEME.ACCENT_RED or THEME.BG_WINDOW
                 dot.Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
             end)
+
             return container
         end
 
-        -- ABA 1: OVERVIEW
-        local pageOverview = pages["Overview"]
+        -- =========================================================================
+        -- [ABA 1] PAINEL GERAL (OVERVIEW)
+        -- =========================================================================
+        local pageOverview = pages["Dashboard"]
+
+        -- Card de Boas-vindas e Ativação Mestra
         local masterCard = Instance.new("Frame")
         masterCard.Size = UDim2.new(1, 0, 0, 68)
         masterCard.BackgroundColor3 = THEME.BG_INPUT
@@ -1569,6 +2567,7 @@ do
             DashboardGUI.AddDiagnosticLog("ENGINE", active and "Módulo iniciado com sucesso" or "Módulo colocado em espera", active and "OK" or "WARN")
         end)
 
+        -- Seletor de Perfis Rápidos em Cards
         local profileHeader = Instance.new("TextLabel")
         profileHeader.Size = UDim2.new(1, 0, 0, 18)
         profileHeader.BackgroundTransparency = 1
@@ -1610,6 +2609,7 @@ do
             pBtn.Parent = profileGrid
             AddCorner(pBtn, 6)
             AddStroke(pBtn, THEME.BORDER, 1)
+
             profileCards[pName] = pBtn
 
             pBtn.MouseButton1Click:Connect(function()
@@ -1619,6 +2619,7 @@ do
             end)
         end
 
+        -- Mini Dashboard de Métricas Instantâneas
         local metricsGrid = Instance.new("Frame")
         metricsGrid.Size = UDim2.new(1, 0, 0, 84)
         metricsGrid.BackgroundTransparency = 1
@@ -1667,7 +2668,9 @@ do
         CreateMetricCard("ALVO ATIVO", "NENHUM", "ActiveTarget")
         CreateMetricCard("TAXA DE QUADROS", "60 FPS", "FpsCounter")
 
-        -- ABA 2: CAMERA
+        -- =========================================================================
+        -- [ABA 2] CÂMERA & VETORES
+        -- =========================================================================
         local pageCamera = pages["Camera"]
         CreateToggleField(pageCamera, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"))
         CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
@@ -1679,7 +2682,9 @@ do
         CreateSliderField(pageCamera, "Frequência de Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5)
         CreateSliderField(pageCamera, "Raio Máximo de Atuação (studs)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
 
-        -- ABA 3: SIMULAÇÃO
+        -- =========================================================================
+        -- [ABA 3] SIMULAÇÃO & COMPORTAMENTO
+        -- =========================================================================
         local pageSim = pages["Simulation"]
 
         -- Seletor de Modo de Mira (AimMode)
@@ -1824,7 +2829,9 @@ do
         CreateSliderField(pageSim, "Duração do Ciclo de Teste (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5)
         CreateSliderField(pageSim, "Agentes Concorrentes Simulados", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1)
 
-        -- ABA 4: LINHA DE VISÃO & SILENT AIM
+        -- =========================================================================
+        -- [ABA 4] LINHA DE VISÃO & SILENT AIM
+        -- =========================================================================
         local pageVision = pages["Vision"]
         CreateToggleField(pageVision, "Realce Visual de Entidades (Highlights ESP)", "EnableESP", SimConfig.Get("EnableESP"))
         CreateToggleField(pageVision, "Exibir Círculo de FOV na Tela", "ShowFovCircle", SimConfig.Get("ShowFovCircle"))
@@ -1849,8 +2856,11 @@ do
         CreateSliderField(pageVision, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5)
         CreateToggleField(pageVision, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
 
-        -- ABA 5: HITBOX
+        -- =========================================================================
+        -- [ABA 5] MAPEAMENTO HITBOX (MANEQUIM INTERATIVO)
+        -- =========================================================================
         local pageHitbox = pages["Hitbox"]
+
         local mannequinContainer = Instance.new("Frame")
         mannequinContainer.Size = UDim2.new(1, 0, 0, 260)
         mannequinContainer.BackgroundColor3 = THEME.BG_INPUT
@@ -1858,6 +2868,7 @@ do
         AddCorner(mannequinContainer, 8)
         AddStroke(mannequinContainer, THEME.BORDER, 1)
 
+        -- Linhas do esqueleto
         local spine = Instance.new("Frame")
         spine.Size = UDim2.new(0, 2, 0.55, 0)
         spine.Position = UDim2.new(0.5, -1, 0.18, 0)
@@ -1908,10 +2919,12 @@ do
         }
 
         local nodeButtons: { { Btn: TextButton, Region: string } } = {}
+
         local function HighlightNodeRegion(regionName: string)
             activeBadge.Text = "REGIÃO ATIVA: [ " .. string.upper(regionName) .. " ]"
             for _, n in ipairs(nodeButtons) do
-                n.Btn.BackgroundColor3 = (n.Region == regionName) and THEME.ACCENT_RED or THEME.BORDER_LIGHT
+                local isSelected = (n.Region == regionName)
+                n.Btn.BackgroundColor3 = isSelected and THEME.ACCENT_RED or THEME.BORDER_LIGHT
             end
         end
 
@@ -1933,8 +2946,11 @@ do
             end)
         end
 
-        -- ABA 6: DIAGNOSTICOS
+        -- =========================================================================
+        -- [ABA 6] DIAGNÓSTICOS & LOGS
+        -- =========================================================================
         local pageDiag = pages["Diagnostics"]
+
         local diagHeader = Instance.new("Frame")
         diagHeader.Size = UDim2.new(1, 0, 0, 36)
         diagHeader.BackgroundColor3 = THEME.BG_INPUT
@@ -1991,8 +3007,11 @@ do
             DashboardGUI.AddDiagnosticLog("SYSTEM", "Logs limpos com sucesso.", "INFO")
         end)
 
-        -- ABA 7: PERFORMANCE
+        -- =========================================================================
+        -- [ABA 7] DESEMPENHO & FRAME TIME
+        -- =========================================================================
         local pagePerf = pages["Performance"]
+
         local perfCard = Instance.new("Frame")
         perfCard.Size = UDim2.new(1, 0, 0, 110)
         perfCard.BackgroundColor3 = THEME.BG_INPUT
@@ -2023,7 +3042,9 @@ do
         perfInfo.Parent = perfCard
         TelemetryLabels["PerfInfo"] = perfInfo
 
-        -- ABA 8: SETTINGS
+        -- =========================================================================
+        -- [ABA 8] CONFIGURAÇÕES & ARMAZENAMENTO
+        -- =========================================================================
         local pageSettings = pages["Settings"]
         CreateToggleField(pageSettings, "Ativar Watchdog Contínuo em Segundo Plano", "WatchdogEnabled", SimConfig.Get("WatchdogEnabled"))
         CreateToggleField(pageSettings, "Exibir Mensagens de Debug no Console", "DebugLogging", SimConfig.Get("DebugLogging"))
@@ -2067,12 +3088,205 @@ do
         end)
 
         CreateExportBtn("↺ RESTAURAR PADRÕES", function()
-            SimConfig.LoadProfile("Normal")
-            UpdateProfileUI("Normal")
-            DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações restauradas para o perfil Normal.", "WARN")
+            SimConfig.RestoreDefaults("Restaurar padrões (UI)")
+            UpdateProfileUI(SimConfig.DefaultProfileName)
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações restauradas para o perfil padrão.", "WARN")
         end)
 
-        -- FOOTER
+        -- =========================================================================
+        -- [ABA] LINE OF SIGHT  (resultado tri-state, causa, obstrução, histórico, cenários)
+        -- =========================================================================
+        local function MakeInfoLabel(parent: Instance, text: string, color: Color3?, height: number?): TextLabel
+            local l = Instance.new("TextLabel")
+            l.Size = UDim2.new(1, 0, 0, height or 24)
+            l.BackgroundColor3 = THEME.BG_INPUT
+            l.BackgroundTransparency = 0.5
+            l.Font = Enum.Font.GothamMedium
+            l.TextSize = 11
+            l.TextColor3 = color or THEME.TEXT_MUTED
+            l.TextXAlignment = Enum.TextXAlignment.Left
+            l.TextYAlignment = Enum.TextYAlignment.Top
+            l.TextWrapped = true
+            l.Text = "  " .. text
+            l.Parent = parent
+            AddCorner(l, 5)
+            return l
+        end
+
+        local function MakeButtonGrid(parent: Instance, cellW: number): Frame
+            local grid = Instance.new("Frame")
+            grid.Size = UDim2.new(1, 0, 0, 0)
+            grid.AutomaticSize = Enum.AutomaticSize.Y
+            grid.BackgroundTransparency = 1
+            grid.Parent = parent
+            local layout = Instance.new("UIGridLayout")
+            layout.CellSize = UDim2.new(0, cellW, 0, 28)
+            layout.CellPadding = UDim2.new(0, 6, 0, 6)
+            layout.Parent = grid
+            return grid
+        end
+
+        local function MakeGridButton(grid: Instance, text: string, onClick: () -> ())
+            local b = Instance.new("TextButton")
+            b.BackgroundColor3 = THEME.BG_INPUT
+            b.Font = Enum.Font.GothamMedium
+            b.TextSize = 10
+            b.TextColor3 = THEME.TEXT_MAIN
+            b.TextWrapped = true
+            b.Text = text
+            b.Parent = grid
+            AddCorner(b, 5)
+            AddStroke(b, THEME.BORDER, 1)
+            b.MouseButton1Click:Connect(onClick)
+        end
+
+        local pageLos = pages["LineOfSight"]
+        MakeInfoLabel(pageLos, "Política: CanCollide=false não bloqueia; barreira invisível COM colisão bloqueia; água ignorada. Cenários rodam em geometria temporária isolada (Y=900), sem jogadores reais.", THEME.TEXT_MUTED, 44)
+        LosLabels["Status"] = MakeInfoLabel(pageLos, "Última consulta: (nenhuma)", THEME.TEXT_MUTED, 26)
+        LosLabels["Reason"] = MakeInfoLabel(pageLos, "Causa: —", THEME.TEXT_MUTED, 24)
+        LosLabels["Blocker"] = MakeInfoLabel(pageLos, "Obstrução: —", THEME.TEXT_MUTED, 24)
+        LosLabels["Distance"] = MakeInfoLabel(pageLos, "Distância da colisão: —", THEME.TEXT_MUTED, 24)
+
+        local scenarioGrid = MakeButtonGrid(pageLos, 150)
+        for _, sc in ipairs(ScenarioRunner.Scenarios) do
+            MakeGridButton(scenarioGrid, "▶ " .. sc.Label, function()
+                if DashboardGUI.OnRunLosScenario then
+                    DashboardGUI.OnRunLosScenario(sc.Id)
+                else
+                    DashboardGUI.AddDiagnosticLog("LOS", "Executor de cenários não conectado.", "WARN")
+                end
+            end)
+        end
+        MakeGridButton(scenarioGrid, "🗑 Limpar histórico", function()
+            if DashboardGUI.OnClearLosHistory then DashboardGUI.OnClearLosHistory() end
+            if LosHistoryList then
+                for _, ch in ipairs(LosHistoryList:GetChildren()) do
+                    if ch:IsA("TextLabel") then ch:Destroy() end
+                end
+            end
+        end)
+
+        local losHistory = Instance.new("ScrollingFrame")
+        losHistory.Size = UDim2.new(1, 0, 0, 170)
+        losHistory.BackgroundColor3 = THEME.BG_WINDOW
+        losHistory.ScrollBarThickness = 4
+        losHistory.CanvasSize = UDim2.new(0, 0, 0, 0)
+        losHistory.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        losHistory.Parent = pageLos
+        AddCorner(losHistory, 6)
+        AddStroke(losHistory, THEME.BORDER, 1)
+        local losHistLayout = Instance.new("UIListLayout")
+        losHistLayout.Padding = UDim.new(0, 2)
+        losHistLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        losHistLayout.Parent = losHistory
+        LosHistoryList = losHistory
+
+        -- =========================================================================
+        -- [ABA] DETECTION / TELEMETRY  (dados vindos do EngineCore real via bootstrap)
+        -- =========================================================================
+        local pageDet = pages["Diagnostics"]
+        DetLabels["State"] = MakeInfoLabel(pageDet, "Estado: aguardando amostras reais (sem dados fictícios)", THEME.TEXT_MUTED, 24)
+        DetLabels["Samples"] = MakeInfoLabel(pageDet, "Amostras válidas: 0", THEME.TEXT_MUTED, 24)
+        DetLabels["Missing"] = MakeInfoLabel(pageDet, "Dados ausentes: —", THEME.TEXT_MUTED, 40)
+        DetLabels["Rules"] = MakeInfoLabel(pageDet, "Regras avaliadas: 0", THEME.TEXT_MUTED, 24)
+        DetLabels["Anomalies"] = MakeInfoLabel(pageDet, "Anomalias: nenhuma", THEME.TEXT_MUTED, 40)
+        DetLabels["Why"] = MakeInfoLabel(pageDet, "Justificativas: —", THEME.TEXT_MUTED, 70)
+        DetLabels["Perf"] = MakeInfoLabel(pageDet, "Desempenho: —", THEME.TEXT_MUTED, 24)
+        DetLabels["Tests"] = MakeInfoLabel(pageDet, "Cenários LOS: nenhum executado", THEME.TEXT_MUTED, 24)
+
+        -- =========================================================================
+        -- [ABA] CONFIGURATION  (perfil, tema, escala, depuração, import/export, persistência)
+        -- =========================================================================
+        local pageCfg = pages["Settings"]
+        local profileLabel = MakeInfoLabel(pageCfg, "Perfil: " .. tostring(SimConfig.Get("ActiveProfile")), THEME.ACCENT_RED, 24)
+        DetLabels["Profile"] = profileLabel
+        MakeInfoLabel(pageCfg, string.format("Versão da configuração: %d  |  Perfil padrão: %s", SimConfig.ConfigVersion, SimConfig.DefaultProfileName), THEME.TEXT_MUTED, 24)
+
+        CreateToggleField(pageCfg, "Visualizar manequins sintéticos (realces)", "ShowSyntheticTargets", SimConfig.Get("ShowSyntheticTargets"))
+        CreateToggleField(pageCfg, "Marcadores e informações de depuração", "ShowDebugMarkers", SimConfig.Get("ShowDebugMarkers"))
+        CreateToggleField(pageCfg, "Diagnóstico de Line of Sight", "LineOfSightEnabled", SimConfig.Get("LineOfSightEnabled"))
+        CreateToggleField(pageCfg, "Indicadores de telemetria", "TelemetryIndicators", SimConfig.Get("TelemetryIndicators"))
+        CreateToggleField(pageCfg, "Histórico de diagnóstico", "HistoryEnabled", SimConfig.Get("HistoryEnabled"))
+        CreateToggleField(pageCfg, "Painel visível", "PanelEnabled", SimConfig.Get("PanelEnabled"))
+        CreateToggleField(pageCfg, "Barra lateral de navegação visível", "SidebarEnabled", SimConfig.Get("SidebarEnabled"))
+        CreateToggleField(pageCfg, "Persistir preferências", "PersistenceEnabled", SimConfig.Get("PersistenceEnabled"))
+        CreateSliderField(pageCfg, "Raio do FOV visual de demonstração (px)", "FovRadiusPx", 20, 600, SimConfig.Get("FovRadiusPx"), 5)
+        CreateSliderField(pageCfg, "Limite do histórico", "HistoryLimit", 5, 500, SimConfig.Get("HistoryLimit"), 5)
+        CreateSliderField(pageCfg, "Escala da interface", "UiScale", 0.7, 1.5, SimConfig.Get("UiScale"), 0.05)
+
+        local cfgGrid = MakeButtonGrid(pageCfg, 150)
+        MakeGridButton(cfgGrid, "Tema: alternar Dark/Darker", function()
+            SimConfig.Set("Theme", SimConfig.Get("Theme") == "Dark" and "Darker" or "Dark")
+        end)
+        MakeGridButton(cfgGrid, "↺ Restaurar padrões", function()
+            SimConfig.RestoreDefaults("Restaurar padrões (aba Configuration)")
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Perfil restaurado: " .. SimConfig.DefaultProfileName, "OK")
+        end)
+        MakeGridButton(cfgGrid, "💾 Salvar preferências", function()
+            local saved = SimConfig.Save()
+            DashboardGUI.AddDiagnosticLog("CONFIG", saved and "Preferências salvas." or "Persistência indisponível neste ambiente (nada salvo).", saved and "OK" or "WARN")
+        end)
+        MakeGridButton(cfgGrid, "📂 Carregar preferências", function()
+            local status = SimConfig.Load()
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Carregamento: " .. status .. (SimConfig.LastLoadReason ~= "" and (" — " .. SimConfig.LastLoadReason) or ""), status == "loaded" and "OK" or "WARN")
+        end)
+
+        local importBox = Instance.new("TextBox")
+        importBox.Size = UDim2.new(1, 0, 0, 54)
+        importBox.BackgroundColor3 = THEME.BG_WINDOW
+        importBox.TextColor3 = THEME.TEXT_MAIN
+        importBox.PlaceholderText = "Cole aqui o JSON exportado e clique em Importar"
+        importBox.PlaceholderColor3 = THEME.TEXT_MUTED
+        importBox.Font = Enum.Font.Code
+        importBox.TextSize = 10
+        importBox.TextWrapped = true
+        importBox.ClearTextOnFocus = false
+        importBox.MultiLine = true
+        importBox.TextXAlignment = Enum.TextXAlignment.Left
+        importBox.TextYAlignment = Enum.TextYAlignment.Top
+        importBox.Text = ""
+        importBox.Parent = pageCfg
+        AddCorner(importBox, 5)
+        AddStroke(importBox, THEME.BORDER, 1)
+        local importGrid = MakeButtonGrid(pageCfg, 150)
+        MakeGridButton(importGrid, "⬇ Importar (validado)", function()
+            local ok, errors = SimConfig.ImportJSON(importBox.Text)
+            if ok then
+                DashboardGUI.AddDiagnosticLog("CONFIG", "Importação aplicada.", "OK")
+            else
+                DashboardGUI.AddDiagnosticLog("CONFIG", "Importação rejeitada: " .. table.concat(errors, "; "):sub(1, 160), "WARN")
+            end
+        end)
+
+        -- Escala da interface (UIScale) e navegação refletidas a partir da configuração
+        local uiScale = Instance.new("UIScale")
+        uiScale.Scale = tonumber(SimConfig.Get("UiScale")) or 1
+        uiScale.Parent = mainFrame
+        mainFrame.Visible = SimConfig.Get("PanelEnabled") ~= false
+        sidebar.Visible = SimConfig.Get("SidebarEnabled") ~= false
+        mainFrame.BackgroundColor3 = (SimConfig.Get("Theme") == "Darker") and Color3.fromRGB(5, 6, 8) or THEME.BG_WINDOW
+
+        -- Aba inicial vem da configuração (padrão: Dashboard)
+        local startTab = tostring(SimConfig.Get("ActiveTab"))
+        if pages[startTab] then SwitchTab(startTab) else SwitchTab("Dashboard") end
+
+        ApplyRuntimeConfig = function(key: string, val: any)
+            if key == "UiScale" then
+                uiScale.Scale = math.clamp(tonumber(val) or 1, 0.7, 1.5)
+            elseif key == "PanelEnabled" then
+                mainFrame.Visible = (val == true)
+            elseif key == "SidebarEnabled" then
+                sidebar.Visible = (val == true)
+            elseif key == "Theme" then
+                mainFrame.BackgroundColor3 = (val == "Darker") and Color3.fromRGB(5, 6, 8) or THEME.BG_WINDOW
+            elseif key == "ActiveProfile" then
+                profileLabel.Text = "  Perfil: " .. tostring(val)
+            end
+        end
+
+        -- ---------------------------------------------------------------------
+        -- Barra Inferior de Ações
+        -- ---------------------------------------------------------------------
         local footer = Instance.new("Frame")
         footer.Size = UDim2.new(1, 0, 0, 48)
         footer.Position = UDim2.new(0, 0, 1, -48)
@@ -2109,20 +3323,14 @@ do
         end
 
         CreateBottomButton("↺ RESETAR", false, function()
-            SimConfig.LoadProfile("Normal")
-            UpdateProfileUI("Normal")
+            SimConfig.RestoreDefaults("Restaurar padrões (UI)")
+            UpdateProfileUI(SimConfig.DefaultProfileName)
             if DashboardGUI.OnResetRequested then DashboardGUI.OnResetRequested() end
         end)
 
         CreateBottomButton("💾 SALVAR CONFIG", false, function()
-            pcall(function()
-                game:GetService("StarterGui"):SetCore("SendNotification", {
-                    Title = "DeepHat Suite",
-                    Text = "Configurações persistidas com sucesso!",
-                    Duration = 3
-                })
-            end)
-            DashboardGUI.AddDiagnosticLog("SAVE", "Configurações salvas no armazenamento local.", "OK")
+            local saved = SimConfig.Save()
+            DashboardGUI.AddDiagnosticLog("SAVE", saved and "Configurações persistidas." or "Persistência indisponível neste ambiente (nada salvo).", saved and "OK" or "WARN")
             if DashboardGUI.OnSaveRequested then DashboardGUI.OnSaveRequested() end
         end)
 
@@ -2142,12 +3350,14 @@ do
             if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
         end)
 
+        -- Sincronização Observer Segura com Cleanup de Instância Anterior
         if unsubscribeGlobal then
             unsubscribeGlobal()
             unsubscribeGlobal = nil
         end
 
         unsubscribeGlobal = SimConfig.SubscribeAll(function(key, val)
+            if ApplyRuntimeConfig then ApplyRuntimeConfig(key, val) end
             if key == "ActiveProfile" then
                 UpdateProfileUI(tostring(val))
             elseif key == "TargetRegion" then
@@ -2171,9 +3381,15 @@ do
             end
         end)
 
+        -- Log Inicial
         DashboardGUI.AddDiagnosticLog("INIT", "Dashboard GUI carregada com 8 abas de controle.", "OK")
+
         return screenGui
     end
+
+    -- =========================================================================
+    -- MÉTODOS PÚBLICOS DE TELEMETRIA & ATUALIZAÇÃO
+    -- =========================================================================
 
     function DashboardGUI:UpdateFovCircle()
         if not FovCircleInstance or not FovCircleInstance.Parent then return end
@@ -2189,7 +3405,7 @@ do
             local vp = camera.ViewportSize
             local halfFovRad = math.rad(fov / 2)
             local camFovRad = math.rad(camera.FieldOfView / 2)
-            local radius = (math.tan(halfFovRad) / math.max(math.tan(camFovRad), 0.001)) * (vp.Y / 2)
+            local radius = tonumber(SimConfig.Get("FovRadiusPx")) or 120
             FovCircleInstance.Size = UDim2.new(0, radius * 2, 0, radius * 2)
             FovCircleInstance.Position = UDim2.new(0.5, 0, 0.5, 0)
         end
@@ -2203,17 +3419,23 @@ do
         mode: string?
     })
         if not data then return end
+        if SimConfig.Get("TelemetryIndicators") == false then return end
+
         local angVel = tonumber(data.angularVelocity) or 0
-        if angVel > PerformanceData.PeakAngVel then PerformanceData.PeakAngVel = angVel end
+        if angVel > PerformanceData.PeakAngVel then
+            PerformanceData.PeakAngVel = angVel
+        end
 
         if TelemetryLabels["AngVel"] then
             TelemetryLabels["AngVel"].Text = string.format("%.1f °/s", angVel)
         end
+
         if TelemetryLabels["VisStatus"] then
             local obstructed = (data.isObstructed == true)
             TelemetryLabels["VisStatus"].Text = obstructed and "OBSTRUÍDO" or "LIVRE"
             TelemetryLabels["VisStatus"].TextColor3 = obstructed and THEME.ACCENT_RED or THEME.SUCCESS
         end
+
         if TelemetryLabels["ActiveTarget"] then
             local tName = data.targetName or "NENHUM"
             TelemetryLabels["ActiveTarget"].Text = tName
@@ -2241,7 +3463,9 @@ do
         end
     end
 
-    -- Watchdog em background
+    -- =========================================================================
+    -- WATCHDOG DE FUNDO (CONTINUOUS BACKGROUND HEALTH CHECK)
+    -- =========================================================================
     task.spawn(function()
         while true do
             task.wait(1.5)
@@ -2250,6 +3474,7 @@ do
                 local healthGood = true
                 local reason = ""
 
+                -- 1. Verifica integridade da câmera
                 if not camera then
                     healthGood = false
                     reason = "Câmera ausente"
@@ -2262,9 +3487,13 @@ do
                     end
                 end
 
+                -- 2. Verifica limites do SimConfig
                 local fov = tonumber(SimConfig.Get("FOV")) or 70
-                if fov < 10 or fov > 180 then SimConfig.Set("FOV", math.clamp(fov, 10, 180)) end
+                if fov < 10 or fov > 180 then
+                    SimConfig.Set("FOV", math.clamp(fov, 10, 180))
+                end
 
+                -- 3. Atualiza Badge
                 if WatchdogBadgeInstance and WatchdogBadgeInstance.Parent then
                     if healthGood then
                         WatchdogBadgeInstance.Text = "● WATCHDOG: 100% OPERACIONAL"
@@ -2278,26 +3507,126 @@ do
             end
         end
     end)
+
+    -- Atualiza a aba Line of Sight com dados reais do VectorTracker (LastLos / LosHistory)
+    function DashboardGUI:UpdateLos(last: any, history: { any }?)
+        local status = LosLabels["Status"]
+        if not status or not status.Parent then return end
+        if not last then
+            status.Text = "  Última consulta: (nenhuma)"
+            status.TextColor3 = THEME.TEXT_MUTED
+            return
+        end
+        local color = THEME.WARNING
+        if last.Status == "VISIBLE" then color = THEME.SUCCESS elseif last.Status == "BLOCKED" then color = THEME.ACCENT_RED end
+        status.Text = "  Última consulta: " .. tostring(last.Status)
+        status.TextColor3 = color
+        LosLabels["Reason"].Text = "  Causa: " .. tostring(last.Reason)
+        LosLabels["Blocker"].Text = "  Obstrução: " .. tostring(last.BlockerName or "—")
+        LosLabels["Distance"].Text = last.HitDistance and string.format("  Distância da colisão: %.2f studs (consulta: %.2f)", last.HitDistance, last.QueryDistance or 0)
+            or string.format("  Distância da colisão: — (consulta: %.2f)", last.QueryDistance or 0)
+
+        if LosHistoryList and history then
+            local newest = history[#history]
+            local stamp = newest and (newest.Time * 1000 + #history) or 0
+            if stamp == LastRenderedLosStamp then return end
+            LastRenderedLosStamp = stamp
+            for _, ch in ipairs(LosHistoryList:GetChildren()) do
+                if ch:IsA("TextLabel") then ch:Destroy() end
+            end
+            for i = #history, math.max(1, #history - 39), -1 do
+                local h = history[i]
+                local c = THEME.WARNING
+                if h.Status == "VISIBLE" then c = THEME.SUCCESS elseif h.Status == "BLOCKED" then c = THEME.ACCENT_RED end
+                local row = Instance.new("TextLabel")
+                row.Size = UDim2.new(1, -8, 0, 18)
+                row.BackgroundTransparency = 1
+                row.Font = Enum.Font.Code
+                row.TextSize = 10
+                row.TextColor3 = c
+                row.TextXAlignment = Enum.TextXAlignment.Left
+                row.LayoutOrder = #history - i
+                row.Text = string.format("  %-8s %-14s %s%s", h.Status, tostring(h.Target), tostring(h.Reason),
+                    h.Blocker and (" [" .. h.Blocker .. "]") or "")
+                row.Parent = LosHistoryList
+            end
+        end
+    end
+
+    -- Atualiza a aba Detection / Telemetry com o relatório real do EngineCore
+    -- info = { report = SuspicionReport?, samples = number, perfMs = number?, scenarioPass = number, scenarioFail = number, engineAvailable = boolean }
+    function DashboardGUI:UpdateDetection(info: any)
+        if not DetLabels["State"] or not DetLabels["State"].Parent or not info then return end
+        local r = info.report
+        if not info.engineAvailable then
+            DetLabels["State"].Text = "  Estado: EngineCore indisponível neste ambiente"
+            DetLabels["State"].TextColor3 = THEME.WARNING
+        elseif not r then
+            DetLabels["State"].Text = "  Estado: aguardando amostras reais"
+            DetLabels["State"].TextColor3 = THEME.TEXT_MUTED
+        else
+            local color = THEME.SUCCESS
+            if r.category == "INSUFICIENTE" then color = THEME.WARNING
+            elseif r.category ~= "LIMPO" then color = THEME.ACCENT_RED end
+            DetLabels["State"].Text = string.format("  Classificação: %s (score %d)", r.category, r.totalScore)
+            DetLabels["State"].TextColor3 = color
+            DetLabels["Missing"].Text = "  Dados ausentes: " .. (#r.unavailableMetrics > 0 and table.concat(r.unavailableMetrics, ", ") or "nenhum")
+            DetLabels["Rules"].Text = string.format("  Regras avaliadas: %d", r.evaluatedRules)
+            DetLabels["Anomalies"].Text = "  Anomalias: " .. (#r.anomalies > 0 and table.concat(r.anomalies, ", ") or "nenhuma")
+            DetLabels["Why"].Text = "  Justificativas: " .. (#r.explanations > 0 and table.concat(r.explanations, " | ") or "—")
+        end
+        DetLabels["Samples"].Text = string.format("  Amostras válidas: %d", info.samples or 0)
+        if info.perfMs then
+            DetLabels["Perf"].Text = string.format("  Desempenho: pipeline %.3f ms/frame", info.perfMs)
+        end
+        local p, f = info.scenarioPass or 0, info.scenarioFail or 0
+        DetLabels["Tests"].Text = (p + f == 0) and "  Cenários LOS: nenhum executado" or string.format("  Cenários LOS: %d aprovados / %d reprovados", p, f)
+    end
 end
 
 -- =========================================================================
--- [6] INICIALIZAÇÃO DA EXECUÇÃO
+-- INICIALIZAÇÃO (SimulationBootstrap.client.lua)
 -- =========================================================================
-DashboardGUI.Create()
+-- =========================================================================
+-- SimulationBootstrap.client.lua
+-- Orquestrador Principal do Sistema Modular (Ambiente Studio e Cliente Roblox)
+-- Integração: SimConfig, InstanceDetector, VectorTracker,
+--             VisualOverlayRenderer e DashboardGUI
+-- Recursos Avançados: Modos de Prioridade de Alvo, Silent Aim Simulado e Tracers 3D
+-- =========================================================================
 
-local filterInstances: { Instance } = {}
-if LocalPlayer.Character then table.insert(filterInstances, LocalPlayer.Character) end
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
 
-local Detector = InstanceDetector.new(0.12)
-local Tracker = VectorTracker.new(filterInstances)
-local Renderer = VisualOverlayRenderer.new()
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
 
-LocalPlayer.CharacterAdded:Connect(function(char)
-    table.clear(filterInstances)
-    table.insert(filterInstances, char)
-    Tracker:SetFilterInstances(filterInstances)
-end)
+-- Importação dos Módulos do Kernel
 
+
+DashboardGUI.OnClearLosHistory = function()
+    Tracker:ClearLosHistory()
+    ScenarioRunner.ClearHistory()
+    DashboardGUI.AddDiagnosticLog("LOS", "Histórico de LOS limpo.", "INFO")
+end
+
+DashboardGUI.OnStartRequested = function()
+    DashboardGUI.AddDiagnosticLog("PIPELINE", "Sessão de testes ativada com sucesso.", "OK")
+end
+
+DashboardGUI.OnStopRequested = function()
+    Renderer:ClearAll()
+    DashboardGUI.AddDiagnosticLog("PIPELINE", "Sessão parada. Realces limpos.", "WARN")
+end
+
+DashboardGUI.OnResetRequested = function()
+    Renderer:ClearAll()
+    DashboardGUI.AddDiagnosticLog("PIPELINE", "Perfis e realces resetados.", "INFO")
+end
+
+-- Gerenciamento de Input para Mira (RMB / MouseButton2) e Disparo (LMB / MouseButton1)
 local isRightMouseDown = false
 local isLeftMouseDown = false
 local isToggleAimActive = false
@@ -2324,19 +3653,30 @@ UserInputService.WindowFocusReleased:Connect(function()
     isLeftMouseDown = false
 end)
 
-local BIND_NAME = "DeepHat_StandaloneKernelPipeline"
+-- Pipeline de Renderização de Alta Frequência (RenderStepped)
+local BIND_NAME = "DeepHat_MasterSimulationPipeline"
 pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
 
-local lastTelemetryTime = 0
+local lastTelemetryUpdate = 0
+local lastDetectionUpdate = 0
 local lastTracerTime = 0
+local lastLosRecordTime = 0
+local lastLosStatus = ""
+local lastLosTarget: Instance? = nil
+local sampleCount = 0
+local occludedFrames = 0
+local pipelineMs = 0
+local lastMetrics: { [string]: number }? = nil
+
 RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt: number)
-    pcall(function()
+    local ok, _ = pcall(function()
         local camera = Workspace.CurrentCamera
         if not camera then return end
+        local frameStart = os.clock()
 
-        local isActive = SimConfig.Get("SimulationActive") == true
-        if not isActive then
-            Tracker:ResetTracking()
+        local isSimulationActive = SimConfig.Get("SimulationActive") == true
+        if not isSimulationActive then
+            Tracker:Release()
             Renderer:ClearAll()
             DashboardGUI:UpdateTelemetryDisplay({
                 angularVelocity = 0,
@@ -2365,11 +3705,16 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local isFiring = shouldAim or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
-        local fov = tonumber(SimConfig.Get("FOV")) or 70.0
+        -- FOV de seleção: raio em pixels (FovRadiusPx, o mesmo do círculo visual) convertido em
+        -- ângulo; FOV (graus) funciona como teto máximo.
+        local fovCap = tonumber(SimConfig.Get("FOV")) or 70.0
+        local halfTan = (tonumber(SimConfig.Get("FovRadiusPx")) or 120) / math.max(camera.ViewportSize.Y / 2, 1)
+            * math.tan(math.rad(camera.FieldOfView / 2))
+        local fov = math.min(fovCap, math.deg(math.atan(halfTan)) * 2)
         local preferredBone = tostring(SimConfig.Get("TargetRegion") or "Head")
         local teamCheck = SimConfig.Get("TeamCheck") == true
         local visibleOnly = SimConfig.Get("VisibleOnly") == true
-        local enableESP = SimConfig.Get("EnableESP") == true
+        local enableESP = SimConfig.Get("EnableESP") == true and SimConfig.Get("ShowSyntheticTargets") ~= false
         local enableLead = SimConfig.Get("EnableLead") == true
         local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
         local smoothing = tonumber(SimConfig.Get("Smoothing")) or 0.15
@@ -2387,6 +3732,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local silentAimHitChance = tonumber(SimConfig.Get("SilentAimHitChance")) or 100.0
         local silentAimTracer = SimConfig.Get("SilentAimTracer") == true
 
+        -- 1. Detecção Espacial do Melhor Candidato com Prioridades
         local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
             camera.CFrame.Position,
             camera.CFrame.LookVector,
@@ -2399,6 +3745,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         )
 
         local isObstructed = false
+        local lookBefore = camera.CFrame.LookVector
         local targetName = "NENHUM"
         local calculatedAngVel = 0
         local currentMode = "IDLE"
@@ -2407,24 +3754,46 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
         if bestTarget and targetPos then
             targetName = string.format("%s (%s - %d HP)", bestTarget.Name, targetLabel, math.floor(targetHealth or 100))
-            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos, bestTarget)
 
-            local isTargetValid = true
-            if visibleOnly and isObstructed then isTargetValid = false end
+            -- 2. Linha de visão tri-state (VISIBLE / BLOCKED / INVALID)
+            local losEnabled = SimConfig.Get("LineOfSightEnabled") ~= false
+            local los: any = { Status = "DISABLED", Reason = "Diagnóstico de LOS desativado (não avaliado)", QueryDistance = 0 }
+            if losEnabled then
+                los = Tracker:EvaluateLineOfSight(camera.CFrame.Position, targetPos, bestTarget)
+                Tracker.LosHistoryLimit = tonumber(SimConfig.Get("HistoryLimit")) or 50
+                local nowLos = os.clock()
+                -- Histórico: registra mudanças de estado/alvo ou, no máximo, a cada 0.5 s
+                if los.Status ~= lastLosStatus or bestTarget ~= lastLosTarget or (nowLos - lastLosRecordTime) >= 0.5 then
+                    Tracker.LastLos = los
+                    if SimConfig.Get("HistoryEnabled") ~= false then
+                        Tracker:RecordLos(los, bestTarget.Name)
+                    end
+                    lastLosStatus, lastLosTarget, lastLosRecordTime = los.Status, bestTarget, nowLos
+                end
+            end
+            isObstructed = (los.Status == "BLOCKED")
 
-            local aimPosition = targetPos
-            if enableLead and isTargetValid then
-                local vel = Tracker:EstimateVelocity(bestTarget, targetPos)
-                aimPosition = Tracker:ComputeLead(targetPos, vel, camera.CFrame.Position, projSpeed, true)
+            -- Se configurado para "Somente Visíveis" e houver barreira real, descarta alvo
+            local isTargetValid = (los.Status ~= "INVALID")
+            if visibleOnly and isObstructed then
+                isTargetValid = false
             end
 
+            -- 3. Predição Balística (Lead)
+            local aimPosition = targetPos
+            if enableLead and isTargetValid then
+                local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
+                aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+            end
+
+            -- 4. Realce Visual Dinâmico em Lote (ESP Chams com limpeza automática)
             if enableESP then
                 Renderer:SyncBatchHighlights(Detector.CandidatePool, bestTarget, isObstructed)
             else
                 Renderer:ClearAll()
             end
 
-            -- Simulação de Silent Aim (Vetor Desacoplado da Câmera)
+            -- 5. Simulação de Silent Aim (Disparo Desacoplado da Câmera)
             if silentAimEnabled and isTargetValid then
                 local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
                     camera.CFrame,
@@ -2449,7 +3818,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                             isObstructed,
                             bestTarget
                         )
-                        if silentAimTracer and shotResult.Fired then
+                        if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                             local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
                             Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
                         end
@@ -2457,7 +3826,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 end
             end
 
-            -- Interpolação Cinemática da Câmera (Aimbot Convencional)
+            -- 6. Interpolação Cinemática da Câmera (Aimbot Convencional)
             -- Executa somente quando o Aimbot estiver ativado pelo painel e Silent Aim não estiver sobrescrevendo
             if aimbotEnabled and shouldAim and isTargetValid and not silentAimActive then
                 currentMode = "TRACKING"
@@ -2491,9 +3860,31 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             Renderer:ClearAll()
         end
 
+        -- 7a. Métricas REAIS para o EngineCore (campos não medidos permanecem nil = indisponível)
+        local tracked = (currentMode == "TRACKING" or currentMode == "SNAP")
+        if tracked then
+            local d = math.deg(math.acos(math.clamp(lookBefore:Dot(camera.CFrame.LookVector), -1.0, 1.0)))
+            sampleCount += 1
+            occludedFrames = isObstructed and (occludedFrames + 1) or 0
+            lastMetrics = {
+                angularVelocity = calculatedAngVel,
+                singleFrameDeltaDeg = d,
+                consecutiveOccludedFrames = occludedFrames,
+                decoupledAngleDeg = silentAimActive and decoupledAngle or nil,
+                sampleCount = sampleCount,
+            }
+        elseif silentAimActive then
+            sampleCount += 1
+            lastMetrics = { decoupledAngleDeg = decoupledAngle, sampleCount = sampleCount }
+        else
+            occludedFrames = 0
+            lastMetrics = nil
+        end
+
+        -- 7. Retroalimentação da Telemetria para o Dashboard (Throttle de 20Hz)
         local now = os.clock()
-        if (now - lastTelemetryTime) >= 0.05 then
-            lastTelemetryTime = now
+        if (now - lastTelemetryUpdate) >= 0.05 then
+            lastTelemetryUpdate = now
             DashboardGUI:UpdateTelemetryDisplay({
                 angularVelocity = calculatedAngVel,
                 isObstructed = isObstructed,
@@ -2504,9 +3895,23 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 silentAimActive = silentAimActive
             })
             DashboardGUI:UpdateFovCircle()
+            DashboardGUI:UpdateLos(Tracker.LastLos, Tracker.LosHistory)
+            pipelineMs = pipelineMs * 0.9 + (os.clock() - frameStart) * 1000 * 0.1
+            if (now - lastDetectionUpdate) >= 0.5 then
+                lastDetectionUpdate = now
+                local report = (Engine and lastMetrics) and Engine:CalculateSuspicion(lastMetrics) or nil
+                local pass, fail = ScenarioRunner.Summary()
+                DashboardGUI:UpdateDetection({
+                    report = report, samples = sampleCount, perfMs = pipelineMs,
+                    scenarioPass = pass, scenarioFail = fail, engineAvailable = Engine ~= nil,
+                })
+            end
         end
     end)
 end)
+
+DashboardGUI.AddDiagnosticLog("BOOTSTRAP", "DeepHat Modular Engine ativo em alta fidelidade!", "OK")
+print("[DeepHat Modular Engine] Inicializado com sucesso em alta performance!")
 
 print("[DeepHat v6.0 PRO] Suíte autônoma carregada com sucesso! Pressione [HOME] para abrir/fechar.")
 pcall(function()
