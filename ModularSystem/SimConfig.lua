@@ -344,7 +344,7 @@ local SCHEMA: { [string]: any } = {
     SimulatedAgents = { t = "number", min = 1, max = 16 },
     VisibleOnly = { t = "boolean" }, EnableESP = { t = "boolean" }, ShowFovCircle = { t = "boolean" },
     EnableLead = { t = "boolean" }, ProjectileSpeed = { t = "number", min = 10, max = 5000 },
-    ProjectileType = { t = "string", enum = { "Physics", "Raycast" } },
+    ProjectileType = { t = "string", enum = { "Physics", "Raycast", "Instant" } },
     ProjectileGravity = { t = "number", min = 0, max = 500 },
     ProjectileDropComp = { t = "boolean" },
     TeamCheck = { t = "boolean" }, WallOcclusionCheck = { t = "boolean" },

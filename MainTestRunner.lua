@@ -11,10 +11,12 @@ local SimConfig = require(script.Parent.ModularSystem.SimConfig)
 local VectorTracker = require(script.Parent.ModularSystem.VectorTracker)
 local InstanceDetector = require(script.Parent.ModularSystem.InstanceDetector)
 local VisualOverlayRenderer = require(script.Parent.ModularSystem.VisualOverlayRenderer)
+local DiagnosticAI = require(script.Parent.ModularSystem.DiagnosticAI)
 
 local TotalAssertions = 0
 local PassedAssertions = 0
 local FailedAssertions = 0
+local SkippedTests = 0
 
 local function Assert(condition: boolean, testName: string, detail: string?)
     TotalAssertions = TotalAssertions + 1
@@ -706,6 +708,99 @@ local losRemoved = physTracker:EvaluateLineOfSight(Vector3.new(0, 5, 0), lHead.P
 Assert(losRemoved.Status == "INVALID", "Line of Sight retorna INVALID imediatamente para alvo removido do Workspace")
 
 liveDummy:Destroy()
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 24] MOTOR DE IA DE DIAGNÓSTICO E CHATBOT
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 24] Validando Motor de IA de Diagnóstico e Assistente Chatbot...")
+-- 1. Análise de estado normal (HEALTHY)
+local healthyReport = DiagnosticAI.AnalyzeSystemState(
+    { mode = "AIMBOT", targetName = "Dummy1", angularVelocity = 85.0, isObstructed = false },
+    nil, nil, nil
+)
+Assert(healthyReport.Status == "HEALTHY", "Motor de IA: Estado com velocidade angular normal classificado como HEALTHY")
+Assert(healthyReport.AffectedModule == "Nenhum", "Motor de IA: Sem módulos comprometidos em estado nominal")
+
+-- 2. Análise de falha em disparo por FOV
+local missedShotFov = {
+    Fired = true,
+    InFov = false,
+    IsObstructed = false,
+    HitRegistered = false,
+    DiscrepancyAngleDeg = 48.5,
+    TrajectoryType = "Instant"
+}
+local fovReport = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, missedShotFov)
+Assert(fovReport.Status == "WARNING", "Motor de IA: Disparo fora de FOV gera status WARNING")
+Assert(fovReport.AffectedModule == "SilentAim / SimConfig", "Motor de IA: Módulo afetado atribuído a SilentAim / SimConfig")
+Assert(string.find(fovReport.RootCause, "SilentAimFOV") ~= nil, "Motor de IA: Causa raiz identifica corretamente SilentAimFOV")
+
+-- 3. Análise de oscilação / velocidade angular extrema
+local jitterReport = DiagnosticAI.AnalyzeSystemState(
+    { mode = "AIMBOT", targetName = "Dummy1", angularVelocity = 620.0, isObstructed = false },
+    nil, nil, nil
+)
+Assert(jitterReport.Status == "CRITICAL", "Motor de IA: Velocidade angular extrema (> 500°/s) classificada como CRITICAL")
+Assert(string.find(jitterReport.AffectedModule, "VectorTracker") ~= nil, "Motor de IA: Módulo de rastreamento vetorial apontado como causa da oscilação")
+
+-- 4. Chatbot: Pergunta sobre oscilação/mira
+local queryJitter = DiagnosticAI.QueryChatbot("Por que a mira está oscilando e tremendo?")
+Assert(string.find(queryJitter.Answer, "Suavização") ~= nil, "Chatbot: Resposta sobre oscilação sugere ajuste na Suavização")
+
+-- 5. Chatbot: Pergunta sobre física balística e queda por gravidade
+local queryBallistics = DiagnosticAI.QueryChatbot("como funciona a gravidade e o arco balistico?")
+Assert(string.find(queryBallistics.Answer, "196.2") ~= nil, "Chatbot: Resposta balística cita gravidade padrão de 196.2 studs/s²")
+Assert(string.find(queryBallistics.Answer, "parabólico segmentado") ~= nil, "Chatbot: Resposta balística confirma arco parabólico segmentado")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 25] REORGANIZAÇÃO DO PAINEL EM 5 ABAS CONSOLIDADAS
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 25] Validando Estrutura e Vinculação Reativa das 5 Abas do Painel...")
+local validTabs = { "AimSimulation", "SilentAim", "Ballistics", "Diagnostics", "Settings" }
+for _, tabName in ipairs(validTabs) do
+    SimConfig.Set("ActiveTab", tabName)
+    Assert(SimConfig.Get("ActiveTab") == tabName, string.format("Aba consolidada '%s' configurada e persistida no SimConfig", tabName))
+end
+
+-- Validação de controles balísticos centralizados no SimConfig
+SimConfig.Set("ProjectileType", "Physics")
+Assert(SimConfig.Get("ProjectileType") == "Physics", "SimConfig: ProjectileType configurado para 'Physics'")
+SimConfig.Set("ProjectileType", "Instant")
+Assert(SimConfig.Get("ProjectileType") == "Instant", "SimConfig: ProjectileType configurado para 'Instant'")
+
+SimConfig.Set("ProjectileGravity", 196.2)
+Assert(math.abs(SimConfig.Get("ProjectileGravity") - 196.2) < 0.001, "SimConfig: ProjectileGravity aceita 196.2 studs/s²")
+SimConfig.Set("ProjectileGravity", 0.0)
+Assert(SimConfig.Get("ProjectileGravity") == 0.0, "SimConfig: ProjectileGravity aceita 0 (gravidade zero)")
+
+SimConfig.Set("ProjectileDropComp", true)
+Assert(SimConfig.Get("ProjectileDropComp") == true, "SimConfig: ProjectileDropComp ativado para compensação preditiva")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 26] SINCRONIZAÇÃO ANGULAR E LIMITES DO FOV
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 26] Validando Limites do FOV e Projeção Óptica...")
+SimConfig.Set("FOV", 70.0)
+Assert(SimConfig.Get("FOV") == 70.0, "SimConfig: FOV angular ajustado para 70.0°")
+
+SimConfig.Set("FOV", 2.0)
+Assert(SimConfig.Get("FOV") == 70.0, "SimConfig: FOV < 5° rejeitado pelas regras de validação do SimConfig")
+
+SimConfig.Set("FOV", 195.0)
+Assert(SimConfig.Get("FOV") == 70.0, "SimConfig: FOV > 180° rejeitado pelas regras de validação do SimConfig")
+
+-- Monotonicidade da fórmula óptica de projeção
+local function CalcRadius(fovDeg: number, camFovDeg: number, viewH: number): number
+    local halfFovRad = math.rad(math.clamp(fovDeg, 5, 180) / 2)
+    local halfCamRad = math.rad(math.clamp(camFovDeg, 20, 120) / 2)
+    return (math.tan(halfFovRad) / math.tan(halfCamRad)) * (viewH / 2)
+end
+local r30 = CalcRadius(30, 70, 1080)
+local r60 = CalcRadius(60, 70, 1080)
+local r90 = CalcRadius(90, 70, 1080)
+Assert(r30 < r60 and r60 < r90, "Fórmula óptica do círculo de FOV cresce monotonicamente com o ângulo angular")
+Assert(r30 > 0 and r60 > 0 and r90 > 0, "Raio projetado em pixels é estritamente positivo e não nulo")
+
 print(string.format("  Testes pulados: %d", SkippedTests))
 
 -- -------------------------------------------------------------------------

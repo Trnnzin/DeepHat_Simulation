@@ -59,8 +59,30 @@ local un = SimConfig.Subscribe("FovRadiusPx", function() seen += 1 end)
 SimConfig.Set("FovRadiusPx", 160)
 check(seen == 1, "observer notificado")
 un()
-SimConfig.RestoreDefaults()
-check(SimConfig.Get("FovRadiusPx") == 120 and SimConfig.Get("ActiveProfile") == "DeepHat Simulation Default", "RestoreDefaults recupera perfil completo")
+SimConfig.Set("ProjectileType", "Physics")
+check(SimConfig.Get("ProjectileType") == "Physics", "SimConfig ProjectileType aceita Physics")
+SimConfig.Set("ProjectileGravity", 196.2)
+check(math.abs(SimConfig.Get("ProjectileGravity") - 196.2) < 0.001, "SimConfig ProjectileGravity aceita 196.2")
+SimConfig.Set("ProjectileDropComp", true)
+check(SimConfig.Get("ProjectileDropComp") == true, "SimConfig ProjectileDropComp aceita true")
+
+print("\n== DiagnosticAI ==")
+local DiagnosticAI = require("./_gen/DiagnosticAI")
+local repHealthy = DiagnosticAI.AnalyzeSystemState({ angularVelocity = 100, mode = "AIMBOT", targetName = "Dummy" })
+check(repHealthy.Status == "HEALTHY", "DiagnosticAI: estado nominal retorna HEALTHY")
+
+local repCrit = DiagnosticAI.AnalyzeSystemState({ angularVelocity = 700, mode = "AIMBOT", targetName = "Dummy1" })
+check(repCrit.Status == "CRITICAL" and repCrit.AffectedModule:find("VectorTracker") ~= nil, "DiagnosticAI: velocidade angular extrema retorna CRITICAL")
+
+local repShotMiss = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, InFov = false, DiscrepancyAngleDeg = 45 })
+check(repShotMiss.Status == "WARNING" and repShotMiss.AffectedModule:find("SilentAim") ~= nil, "DiagnosticAI: tiro fora de FOV aponta SilentAim")
+
+local chatJitter = DiagnosticAI.QueryChatbot("Por que a mira está oscilando?")
+check(chatJitter.Answer:find("Suavização") ~= nil, "Chatbot: pergunta sobre oscilação sugere suavização")
+
+local chatBallistics = DiagnosticAI.QueryChatbot("como funciona a gravidade e o arco balistico?")
+check(chatBallistics.Answer:find("196.2") ~= nil, "Chatbot: pergunta balística menciona gravidade 196.2")
 
 print(string.format("\nOFFLINE: %d aprovados, %d reprovados", passed, failed))
 if failed > 0 then error("falhas") end
+

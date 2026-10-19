@@ -29,6 +29,7 @@ local VectorTracker = require(script.Parent.VectorTracker)
 local VisualOverlayRenderer = require(script.Parent.VisualOverlayRenderer)
 local DashboardGUI = require(script.Parent.DashboardGUI)
 local ScenarioRunner = require(script.Parent.ScenarioRunner)
+local DiagnosticAI = require(script.Parent.DiagnosticAI)
 
 -- EngineCore (avaliação defensiva) é opcional e independente da UI: se não existir no
 -- ambiente, a aba Detection informa indisponibilidade em vez de inventar dados.
@@ -142,24 +143,23 @@ if LocalPlayer then
 end
 
 -- =========================================================================
--- EXECUÇÃO DIAGNÓSTICA DE SILENT AIM (4 ESTÁGIOS ESTRITAMENTE AUDITADOS)
+-- EXECUÇÃO DIAGNÓSTICA DE SILENT AIM (4 ETAPAS ESTRITAMENTE AUDITADAS)
 -- =========================================================================
 local function ExecuteSilentAimShot(source: string): (boolean, string)
-    -- ESTÁGIO 1: Verificação de Inicialização do Módulo
+    -- ETAPA 1: SOLICITAÇÃO RECEBIDA
     local silentAimEnabled = SimConfig.Get("SilentAimEnabled") == true
     if not silentAimEnabled then
-        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Módulo não iniciado / desativado no painel.", "WARN")
-        print(string.format("[SILENT AIM] [ESTÁGIO 1: MÓDULO] Disparo recebido via %s, porém o módulo está DESATIVADO no painel (SilentAimEnabled = false).", source))
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Falha [Solicitação]: Módulo desativado no painel ('SilentAimEnabled' = false).", "WARN")
+        print(string.format("[SILENT AIM] [ETAPA 1: SOLICITAÇÃO RECEBIDA] [FALHA] Disparo via %s rejeitado: Módulo desativado.", source))
         return false, "MODULE_DISABLED"
     end
+    print(string.format("[SILENT AIM] [ETAPA 1: SOLICITAÇÃO RECEBIDA] [SUCESSO] Disparo solicitado com sucesso via %s.", source))
 
-    -- ESTÁGIO 2: Confirmação de Recepção do Disparo
-    print(string.format("[SILENT AIM] [ESTÁGIO 2: DISPARO] Disparo recebido com sucesso via %s.", source))
-
+    -- ETAPA 2: DADOS VALIDADOS
     local camera = Workspace.CurrentCamera
     if not camera then
-        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Câmera ausente.", "WARN")
-        print("[SILENT AIM] [ESTÁGIO 3: ALVO] Falha: Câmera não encontrada no Workspace.")
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Falha [Dados]: Câmera não encontrada no Workspace.", "WARN")
+        print("[SILENT AIM] [ETAPA 2: DADOS VALIDADOS] [FALHA] Câmera ausente.")
         return false, "NO_CAMERA"
     end
 
@@ -179,7 +179,6 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
     local isPhysics = (projType == "Physics")
     local dropComp = SimConfig.Get("ProjectileDropComp") ~= false
 
-    -- ESTÁGIO 3: Seleção e Validação do Candidato
     local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
         camera.CFrame.Position,
         camera.CFrame.LookVector,
@@ -192,44 +191,41 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
     )
 
     if not bestTarget or not targetPos then
-        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado (Nenhum candidato em %d studs).", math.floor(maxRadius)), "WARN")
-        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: Nenhum candidato válido encontrado no raio de %d studs.", math.floor(maxRadius)))
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Falha [Dados]: Nenhum alvo sintético válido no raio de %d studs.", math.floor(maxRadius)), "WARN")
+        print(string.format("[SILENT AIM] [ETAPA 2: DADOS VALIDADOS] [FALHA] Nenhum alvo válido no raio de %d studs.", math.floor(maxRadius)))
         return false, "NO_TARGET_IN_RADIUS"
     end
 
-    -- Verificação de Oclusão (Linha de Visada)
     local los = Tracker:EvaluateLineOfSight(camera.CFrame.Position, targetPos, bestTarget)
     local isObstructed = (los.Status == "BLOCKED")
     if visibleOnly and isObstructed then
-        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado: '%s' ocluído por parede.", bestTarget.Name), "WARN")
-        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: '%s' bloqueado por geometria (VisibleOnly ativo).", bestTarget.Name))
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Falha [Dados]: Alvo '%s' ocluído por geometria.", bestTarget.Name), "WARN")
+        print(string.format("[SILENT AIM] [ETAPA 2: DADOS VALIDADOS] [FALHA] Alvo '%s' bloqueado (VisibleOnly ativo).", bestTarget.Name))
         return false, "TARGET_OCCLUDED"
     end
 
-    -- Predição Balística (Lead com compensação gravitacional em caso de física)
+    -- ETAPA 3: TRAJETÓRIA CALCULADA
     local aimPosition = targetPos
     local bulletDropStuds = 0
+    local flightTime = dist / math.max(projSpeed, 1.0)
     if enableLead then
         local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
-        local leadPos, flightTime, drop = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
+        local leadPos, ft, drop = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true, isPhysics and projGravity or 0, dropComp)
         aimPosition = leadPos
         bulletDropStuds = drop
+        flightTime = ft
+    elseif isPhysics and dropComp and projGravity > 0 then
+        bulletDropStuds = 0.5 * projGravity * (flightTime * flightTime)
+        aimPosition = targetPos + Vector3.new(0, bulletDropStuds, 0)
     end
 
-    -- Validação do Cone Angular de Silent Aim
-    local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
-        camera.CFrame,
-        aimPosition,
-        silentAimFov
-    )
-
+    local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(camera.CFrame, aimPosition, silentAimFov)
     if not inFov then
-        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado: '%s' fora do cone (%.1f° > %.1f°).", bestTarget.Name, discDeg, silentAimFov), "WARN")
-        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: '%s' fora do cone angular de redirecionamento (desvio %.1f° > FOV %.1f°).", bestTarget.Name, discDeg, silentAimFov))
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Falha [Dados/Trajetória]: '%s' fora do cone (Desvio %.1f° > FOV %.1f°).", bestTarget.Name, discDeg, silentAimFov), "WARN")
+        print(string.format("[SILENT AIM] [ETAPA 3: TRAJETÓRIA CALCULADA] [FALHA] Alvo '%s' fora do cone angular (desvio %.1f° > FOV %.1f°).", bestTarget.Name, discDeg, silentAimFov))
         return false, "TARGET_OUTSIDE_FOV"
     end
 
-    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo (com Trajetória Física ou Instantânea)
     local shotResult = Tracker:SimulateShot(
         camera.CFrame,
         aimPosition,
@@ -243,15 +239,18 @@ local function ExecuteSilentAimShot(source: string): (boolean, string)
     )
     Tracker.LastShotResult = shotResult
 
+    local trajDesc = isPhysics and string.format("Física (g=%.1f studs/s², voo=%.2fs, queda=%.1f studs, %d segmentos)", projGravity, shotResult.FlightTime, shotResult.BulletDropStuds, shotResult.TrajectoryPoints and #shotResult.TrajectoryPoints or 0) or "Instantâneo (Raycast)"
+    print(string.format("[SILENT AIM] [ETAPA 3: TRAJETÓRIA CALCULADA] [SUCESSO] %s | Alvo: '%s'.", trajDesc, bestTarget.Name))
+
+    -- ETAPA 4: RESULTADO VERIFICADO
     if silentAimTracer and shotResult.Fired then
         local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
         Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25, shotResult.TrajectoryPoints)
     end
 
     local resTag = shotResult.HitRegistered and "ACERTO" or "DISPERSÃO"
-    local trajDesc = isPhysics and string.format("Física (g=%.1f, t=%.2fs, queda=%.1f studs)", projGravity, shotResult.FlightTime, shotResult.BulletDropStuds) or "Instantâneo (Raycast)"
-    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("[%s] %s em '%s' (Desvio: %.1f°).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
-    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] [%s] %s em '%s' (Desvio: %.1f°, Voo: %.3fs, Queda: %.2f studs, Destino: %s).", trajDesc, resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, shotResult.FlightTime, shotResult.BulletDropStuds, tostring(shotResult.TargetPosition)))
+    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("[%s] %s em '%s' (Desvio: %.1f°).", resTag, trajDesc, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
+    print(string.format("[SILENT AIM] [ETAPA 4: RESULTADO VERIFICADO] [SUCESSO] %s em '%s' (Desvio: %.1f°, Destino: %s).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, tostring(shotResult.TargetPosition)))
 
     return true, resTag
 end
@@ -288,6 +287,50 @@ end
 DashboardGUI.OnResetRequested = function()
     Renderer:ClearAll()
     DashboardGUI.AddDiagnosticLog("PIPELINE", "Perfis e realces resetados.", "INFO")
+end
+
+-- Telemetria e Chatbot de Diagnóstico
+local calculatedAngVel = 0
+local isObstructed = false
+local targetName = "NENHUM"
+local currentMode = "IDLE"
+local decoupledAngle = 0
+local silentAimActive = false
+
+DashboardGUI.OnQueryDiagnosticChatbot = function(query: string)
+    local state = {
+        Telemetry = {
+            angularVelocity = calculatedAngVel,
+            isObstructed = isObstructed,
+            targetName = targetName,
+            mode = currentMode,
+            decoupledAngle = decoupledAngle,
+            silentAimActive = silentAimActive,
+        },
+        LosHistory = Tracker.LosHistory,
+        LastShot = Tracker.LastShotResult,
+        SimConfig = SimConfig,
+    }
+    return DiagnosticAI.QueryChatbot(query, state)
+end
+
+DashboardGUI.OnRunFullDiagnostic = function()
+    local state = {
+        Telemetry = {
+            angularVelocity = calculatedAngVel,
+            isObstructed = isObstructed,
+            targetName = targetName,
+            mode = currentMode,
+            decoupledAngle = decoupledAngle,
+            silentAimActive = silentAimActive,
+        },
+        LosHistory = Tracker.LosHistory,
+        LastShot = Tracker.LastShotResult,
+        SimConfig = SimConfig,
+    }
+    local report = DiagnosticAI.AnalyzeSystemState(state.Telemetry, state.LosHistory, nil, state.LastShot)
+    DashboardGUI.AddDiagnosticLog("DIAGNOSTIC_AI", string.format("[%s] %s (Módulo: %s)", report.Status, report.Summary, report.AffectedModule), report.Status == "HEALTHY" and "OK" or "WARN")
+    return report
 end
 
 -- Gerenciamento de Input para Mira (RMB / MouseButton2) e Disparo (LMB / MouseButton1)
@@ -374,12 +417,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         triggerShotRequested = false
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
-        -- FOV de seleção: raio em pixels (FovRadiusPx, o mesmo do círculo visual) convertido em
-        -- ângulo; FOV (graus) funciona como teto máximo.
-        local fovCap = tonumber(SimConfig.Get("FOV")) or 70.0
-        local halfTan = (tonumber(SimConfig.Get("FovRadiusPx")) or 120) / math.max(camera.ViewportSize.Y / 2, 1)
-            * math.tan(math.rad(camera.FieldOfView / 2))
-        local fov = math.min(fovCap, math.deg(math.atan(halfTan)) * 2)
+        -- FOV de seleção: ângulo configurado pelo usuário no painel (respeitado diretamente)
+        local fov = math.clamp(tonumber(SimConfig.Get("FOV")) or 70.0, 5.0, 180.0)
         local preferredBone = tostring(SimConfig.Get("TargetRegion") or "Head")
         local teamCheck = SimConfig.Get("TeamCheck") == true
         local visibleOnly = SimConfig.Get("VisibleOnly") == true

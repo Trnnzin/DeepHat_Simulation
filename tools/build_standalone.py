@@ -22,6 +22,7 @@ MODULES = [
     ("InstanceDetector", ROOT / "ModularSystem" / "InstanceDetector.lua"),
     ("VectorTracker", ROOT / "ModularSystem" / "VectorTracker.lua"),
     ("VisualOverlayRenderer", ROOT / "ModularSystem" / "VisualOverlayRenderer.lua"),
+    ("DiagnosticAI", ROOT / "ModularSystem" / "DiagnosticAI.lua"),
     ("Engine", ROOT / "EngineCore.lua"),
     ("DashboardGUI", ROOT / "ModularSystem" / "DashboardGUI.lua"),
 ]
