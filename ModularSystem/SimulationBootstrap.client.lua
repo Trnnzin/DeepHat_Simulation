@@ -103,6 +103,18 @@ local function InspectToolPhysics(tool: Instance): { Type: string, Speed: number
     }
 end
 
+local toolConnections: { [Instance]: { RBXScriptConnection } } = {}
+
+local function DisconnectTool(tool: Instance)
+    local conns = toolConnections[tool]
+    if conns then
+        for _, c in ipairs(conns) do
+            pcall(function() c:Disconnect() end)
+        end
+        toolConnections[tool] = nil
+    end
+end
+
 local function HookCharacterTools(char: Instance?)
     if not char then return end
     local function HookTool(child: Instance)
@@ -111,16 +123,25 @@ local function HookCharacterTools(char: Instance?)
             toolCustomPhysics = InspectToolPhysics(child)
             DashboardGUI.AddDiagnosticLog("WEAPON", string.format("Arma equipada: '%s' | Modo: %s", child.Name, toolCustomPhysics.Type), "INFO")
 
-            child.Activated:Connect(function()
+            DisconnectTool(child)
+            local conns: { RBXScriptConnection } = {}
+
+            local actConn = child.Activated:Connect(function()
                 triggerShotRequested = true
                 triggerSource = "Tool.Activated (" .. child.Name .. ")"
             end)
-            child.Unequipped:Connect(function()
+            table.insert(conns, actConn)
+
+            local uneqConn = child.Unequipped:Connect(function()
                 if currentEquippedTool == child then
                     currentEquippedTool = nil
                     toolCustomPhysics = nil
                 end
+                DisconnectTool(child)
             end)
+            table.insert(conns, uneqConn)
+
+            toolConnections[child] = conns
         end
     end
     for _, child in ipairs(char:GetChildren()) do
@@ -134,6 +155,10 @@ if LocalPlayer then
         HookCharacterTools(LocalPlayer.Character)
     end
     LocalPlayer.CharacterAdded:Connect(function(char)
+        for tool, _ in pairs(toolConnections) do
+            DisconnectTool(tool)
+        end
+        table.clear(toolConnections)
         table.clear(filterInstances)
         table.insert(filterInstances, char)
         Tracker:SetFilterInstances(filterInstances)
@@ -662,9 +687,19 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 aimPosition = leadPos
             end
 
-            -- 4. Realce Visual Dinâmico em Lote (ESP Chams com limpeza automática)
+            -- 4. Realce Visual Dinâmico em Lote (ESP Chams e Tags 3D com limpeza automática)
             if enableESP then
                 Renderer:SyncBatchHighlights(Detector.CandidatePool, bestTarget, isObstructed)
+                if bestTarget and targetDistance then
+                    local targetHealth: number? = nil
+                    if targetHumanoid then
+                        targetHealth = targetHumanoid.Health
+                    end
+                    Renderer:UpdateTargetTag(bestTarget, targetDistance, isObstructed, targetHealth, targetName)
+                    Renderer:ClearTagsExcept(bestTarget)
+                else
+                    Renderer:ClearTagsExcept(nil)
+                end
             else
                 Renderer:ClearAll()
             end

@@ -15,6 +15,7 @@ local MAX_ACTIVE_HIGHLIGHTS = 16
 function VisualOverlayRenderer.new()
     local self = setmetatable({}, VisualOverlayRenderer)
     self.ActiveHighlights = {} :: { [Instance]: Highlight }
+    self.ActiveTags = {} :: { [Instance]: BillboardGui }
     self.CleanupConnections = {} :: { [Instance]: RBXScriptConnection }
     self.Container = self:GetOrCreateContainer()
     return self
@@ -155,6 +156,120 @@ function VisualOverlayRenderer:SyncBatchHighlights(
     end
 end
 
+-- Renderização de Indicadores 3D Flutuantes de Depuração (Nome, Distância, LOS, Vida)
+function VisualOverlayRenderer:UpdateTargetTag(
+    target: Instance,
+    distance: number?,
+    isObstructed: boolean?,
+    health: number?,
+    label: string?
+)
+    if not target or not target:IsDescendantOf(game) then
+        self:ClearTarget(target)
+        return
+    end
+
+    local adorneePart: BasePart? = nil
+    if target:IsA("BasePart") then
+        adorneePart = target
+    elseif target:IsA("Model") then
+        adorneePart = (target :: Model).PrimaryPart
+            or target:FindFirstChild("Head") :: BasePart?
+            or target:FindFirstChild("HumanoidRootPart") :: BasePart?
+            or target:FindFirstChildWhichIsA("BasePart")
+    end
+
+    if not adorneePart then return end
+
+    local tag = self.ActiveTags[target]
+    if not tag or not tag.Parent then
+        local ok, newTag = pcall(function()
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "DeepHat_Tag_" .. target.Name
+            bb.Adornee = adorneePart
+            bb.Size = UDim2.new(0, 140, 0, 36)
+            bb.StudsOffset = Vector3.new(0, 3.2, 0)
+            bb.AlwaysOnTop = true
+            bb.MaxDistance = 500
+
+            local bg = Instance.new("Frame")
+            bg.Size = UDim2.new(1, 0, 1, 0)
+            bg.BackgroundColor3 = Color3.fromRGB(15, 17, 23)
+            bg.BackgroundTransparency = 0.35
+            bg.BorderSizePixel = 0
+            bg.Parent = bb
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 4)
+            corner.Parent = bg
+
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = Color3.fromRGB(45, 50, 65)
+            stroke.Thickness = 1
+            stroke.Parent = bg
+
+            local title = Instance.new("TextLabel")
+            title.Name = "Title"
+            title.Size = UDim2.new(1, -6, 0, 16)
+            title.Position = UDim2.new(0, 3, 0, 2)
+            title.BackgroundTransparency = 1
+            title.Font = Enum.Font.GothamBold
+            title.TextSize = 10
+            title.TextColor3 = Color3.fromRGB(245, 246, 250)
+            title.TextXAlignment = Enum.TextXAlignment.Center
+            title.Text = target.Name
+            title.Parent = bg
+
+            local details = Instance.new("TextLabel")
+            details.Name = "Details"
+            details.Size = UDim2.new(1, -6, 0, 14)
+            details.Position = UDim2.new(0, 3, 0, 18)
+            details.BackgroundTransparency = 1
+            details.Font = Enum.Font.Code
+            details.TextSize = 9
+            details.TextColor3 = Color3.fromRGB(46, 204, 113)
+            details.TextXAlignment = Enum.TextXAlignment.Center
+            details.Text = "READY"
+            details.Parent = bg
+
+            bb.Parent = self.Container
+
+            local conn = target.AncestryChanged:Connect(function(_, parent)
+                if not parent then
+                    self:ClearTarget(target)
+                end
+            end)
+            self.CleanupConnections[target] = conn
+
+            return bb
+        end)
+
+        if ok and newTag then
+            tag = newTag
+            self.ActiveTags[target] = tag
+        end
+    end
+
+    if tag then
+        local bg = tag:FindFirstChildOfClass("Frame")
+        if bg then
+            local title = bg:FindFirstChild("Title") :: TextLabel?
+            local details = bg:FindFirstChild("Details") :: TextLabel?
+            if title then
+                title.Text = string.format("%s [%s]", target.Name, label or "Pivot")
+            end
+            if details then
+                local distStr = distance and string.format("%.1f st", distance) or "—"
+                local hpStr = health and string.format("%d HP", math.floor(health)) or "100 HP"
+                local statusStr = isObstructed and "BLOCKED" or "VISIBLE"
+                local statusColor = isObstructed and Color3.fromRGB(255, 65, 75) or Color3.fromRGB(46, 204, 113)
+                details.Text = string.format("%s | %s | %s", statusStr, distStr, hpStr)
+                details.TextColor3 = statusColor
+            end
+        end
+    end
+end
+
 function VisualOverlayRenderer:ClearTarget(target: Instance?)
     if not target then return end
     local hl = self.ActiveHighlights[target]
@@ -163,6 +278,12 @@ function VisualOverlayRenderer:ClearTarget(target: Instance?)
     end
     self.ActiveHighlights[target] = nil
 
+    local tag = self.ActiveTags[target]
+    if tag then
+        pcall(function() tag:Destroy() end)
+    end
+    self.ActiveTags[target] = nil
+
     local conn = self.CleanupConnections[target]
     if conn then
         pcall(function() conn:Disconnect() end)
@@ -170,14 +291,27 @@ function VisualOverlayRenderer:ClearTarget(target: Instance?)
     self.CleanupConnections[target] = nil
 end
 
+function VisualOverlayRenderer:ClearTagsExcept(keepTarget: Instance?)
+    for target, tag in pairs(self.ActiveTags) do
+        if target ~= keepTarget then
+            pcall(function() if tag then tag:Destroy() end end)
+            self.ActiveTags[target] = nil
+        end
+    end
+end
+
 function VisualOverlayRenderer:ClearAll()
     for _, hl in pairs(self.ActiveHighlights) do
         pcall(function() if hl then hl:Destroy() end end)
+    end
+    for _, tag in pairs(self.ActiveTags) do
+        pcall(function() if tag then tag:Destroy() end end)
     end
     for _, conn in pairs(self.CleanupConnections) do
         pcall(function() if conn then conn:Disconnect() end end)
     end
     table.clear(self.ActiveHighlights)
+    table.clear(self.ActiveTags)
     table.clear(self.CleanupConnections)
 end
 

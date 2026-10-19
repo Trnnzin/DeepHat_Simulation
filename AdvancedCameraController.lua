@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- AdvancedCameraController.lua
 -- Modulo de Controle Cinematico de Camera Virtual (Tracking Dinamico com Easing e Ruido Perlin)
 

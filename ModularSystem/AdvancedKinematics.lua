@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- AdvancedKinematics.lua
 -- Modulo 2: Motor de Cinematica Avancada (Snap, Tracking Dinamico, Easing e Telemetria)
 

@@ -383,6 +383,7 @@ function InstanceDetector.SpawnSyntheticDummy(position: Vector3, customName: str
     root.Position = position
     root.Anchored = true
     root.CanCollide = false
+    root.CanQuery = true
     root.Transparency = 1
     root.Parent = dummy
 
@@ -392,6 +393,7 @@ function InstanceDetector.SpawnSyntheticDummy(position: Vector3, customName: str
     torso.Position = position + Vector3.new(0, 1.0, 0)
     torso.Anchored = true
     torso.CanCollide = true
+    torso.CanQuery = true
     torso.Material = Enum.Material.SmoothPlastic
     torso.Color = Color3.fromRGB(60, 65, 75)
     torso.Parent = dummy
@@ -402,6 +404,7 @@ function InstanceDetector.SpawnSyntheticDummy(position: Vector3, customName: str
     head.Position = position + Vector3.new(0, 2.5, 0)
     head.Anchored = true
     head.CanCollide = true
+    head.CanQuery = true
     head.Material = Enum.Material.SmoothPlastic
     head.Color = Color3.fromRGB(230, 230, 235)
     head.Parent = dummy
@@ -411,6 +414,7 @@ function InstanceDetector.SpawnSyntheticDummy(position: Vector3, customName: str
     hum.MaxHealth = 100
     hum.Parent = dummy
 
+    dummy:SetAttribute("DeepHat_Synthetic", true)
     dummy.PrimaryPart = root
     dummy.Parent = folder
     return dummy

@@ -4,6 +4,8 @@ prefix = 'local __m = require("../mocks"); local game, task, warn, typeof = __m.
 mods = ['EngineCore.lua', 'SimConfig.lua', 'DiagnosticAI.lua']
 for m in mods:
     src_path = os.path.join('ModularSystem', m)
+    if not os.path.exists(src_path):
+        src_path = m
     if os.path.exists(src_path):
         with open(src_path, 'r', encoding='utf-8') as f:
             content = f.read()

@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- CameraKinematics.lua
 -- Módulo 1: Cinemática Rotacional de Câmera (Modos Snap e Tracking)
 

@@ -120,21 +120,44 @@ local function GetSafeGuiParent(): Instance
 end
 
 -- =========================================================================
--- LOG DE DIAGNÓSTICOS EM TEMPO REAL
+-- LOG DE DIAGNÓSTICOS EM TEMPO REAL COM FILTRAGEM MULTI-NÍVEL
 -- =========================================================================
+local currentLogFilter = "TODOS"
+
+local function ApplyLogFilter()
+    if not EventLogListInstance then return end
+    for _, child in ipairs(EventLogListInstance:GetChildren()) do
+        if child:IsA("Frame") then
+            local lvl = child:GetAttribute("LogLevel") or "INFO"
+            if currentLogFilter == "TODOS" or lvl == currentLogFilter then
+                child.Visible = true
+            else
+                child.Visible = false
+            end
+        end
+    end
+end
+
 function DashboardGUI.AddDiagnosticLog(source: string, message: string, level: ("INFO" | "WARN" | "OK" | "FAIL")?)
     if not EventLogListInstance or not EventLogListInstance.Parent then return end
 
+    local rowLevel = level or "INFO"
     local color = THEME.TEXT_MAIN
-    if level == "WARN" then color = THEME.WARNING
-    elseif level == "OK" then color = THEME.SUCCESS
-    elseif level == "INFO" then color = THEME.INFO
-    elseif level == "FAIL" then color = THEME.ACCENT_RED end
+    if rowLevel == "WARN" then color = THEME.WARNING
+    elseif rowLevel == "OK" then color = THEME.SUCCESS
+    elseif rowLevel == "INFO" then color = THEME.INFO
+    elseif rowLevel == "FAIL" then color = THEME.ACCENT_RED end
 
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1, 0, 0, 20)
     row.BackgroundColor3 = THEME.BG_INPUT
     row.BackgroundTransparency = 0.5
+    row:SetAttribute("LogLevel", rowLevel)
+    if currentLogFilter ~= "TODOS" and rowLevel ~= currentLogFilter then
+        row.Visible = false
+    else
+        row.Visible = true
+    end
     row.Parent = EventLogListInstance
     AddCorner(row, 3)
 
@@ -264,7 +287,7 @@ function DashboardGUI.Create(): ScreenGui
     titleLabel.TextSize = 13
     titleLabel.TextColor3 = THEME.TEXT_MAIN
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    titleLabel.Text = "DEEPHAT SIMULATION SUITE // v6.0 PRO"
+    titleLabel.Text = "DEEPHAT SIMULATION SUITE // v7.0 PRO"
     titleLabel.Parent = header
 
     -- Badge de Watchdog
@@ -1467,8 +1490,68 @@ function DashboardGUI.Create(): ScreenGui
     losHistLayout.Parent = losHistory
     LosHistoryList = losHistory
 
-    -- Log de Diagnósticos em Tempo Real
-    CreateSectionHeader(pageDiag, "LOG DE EVENTOS EM TEMPO REAL")
+    -- Log de Diagnósticos em Tempo Real com Filtros de Nível
+    local logHeaderFrame = Instance.new("Frame")
+    logHeaderFrame.Size = UDim2.new(1, 0, 0, 26)
+    logHeaderFrame.BackgroundTransparency = 1
+    logHeaderFrame.Parent = pageDiag
+
+    local logTitle = Instance.new("TextLabel")
+    logTitle.Size = UDim2.new(0, 220, 1, 0)
+    logTitle.BackgroundTransparency = 1
+    logTitle.Font = Enum.Font.GothamBold
+    logTitle.TextSize = 11
+    logTitle.TextColor3 = THEME.TEXT_MUTED
+    logTitle.TextXAlignment = Enum.TextXAlignment.Left
+    logTitle.Text = "LOG DE EVENTOS EM TEMPO REAL"
+    logTitle.Parent = logHeaderFrame
+
+    local filterBar = Instance.new("Frame")
+    filterBar.Size = UDim2.new(1, -225, 1, 0)
+    filterBar.Position = UDim2.new(0, 225, 0, 0)
+    filterBar.BackgroundTransparency = 1
+    filterBar.Parent = logHeaderFrame
+
+    local filterLayout = Instance.new("UIListLayout")
+    filterLayout.FillDirection = Enum.FillDirection.Horizontal
+    filterLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    filterLayout.Padding = UDim.new(0, 4)
+    filterLayout.Parent = filterBar
+
+    local filterButtons: { [string]: TextButton } = {}
+    local filterOptions = { "TODOS", "OK", "INFO", "WARN", "FAIL" }
+
+    local function SetActiveFilter(flt: string)
+        currentLogFilter = flt
+        for opt, btn in pairs(filterButtons) do
+            if opt == flt then
+                btn.BackgroundColor3 = THEME.ACCENT_RED
+                btn.TextColor3 = THEME.TEXT_MAIN
+            else
+                btn.BackgroundColor3 = THEME.BG_INPUT
+                btn.TextColor3 = THEME.TEXT_MUTED
+            end
+        end
+        ApplyLogFilter()
+    end
+
+    for _, opt in ipairs(filterOptions) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 52, 0, 22)
+        btn.BackgroundColor3 = (opt == "TODOS") and THEME.ACCENT_RED or THEME.BG_INPUT
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 9
+        btn.TextColor3 = (opt == "TODOS") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        btn.Text = opt
+        btn.Parent = filterBar
+        AddCorner(btn, 4)
+        AddStroke(btn, THEME.BORDER, 1)
+        filterButtons[opt] = btn
+        btn.MouseButton1Click:Connect(function()
+            SetActiveFilter(opt)
+        end)
+    end
+
     local eventLogList = Instance.new("ScrollingFrame")
     eventLogList.Size = UDim2.new(1, 0, 0, 120)
     eventLogList.BackgroundColor3 = THEME.BG_WINDOW

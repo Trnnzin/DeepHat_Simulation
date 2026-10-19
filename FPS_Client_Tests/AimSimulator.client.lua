@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- DeepHat FPS Aim Simulator (Target Lock & Cinematic Camera Tracking)
 -- Otimizado para alta frequencia com RenderStepped, protecao contra divisao por zero e pcall.
 

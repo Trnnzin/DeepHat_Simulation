@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 --[[
     ============================================================================
     MODULO: CameraController (Target Lock System)

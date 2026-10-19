@@ -583,16 +583,21 @@ function VectorTracker:SimulateShot(
         outcomeDesc = "Obstáculo bloqueando o projétil: colisão com barreira sólida antes do alvo."
         table.insert(stages, "[4] COLISÃO VERIFICADA [FALHA]: Obstáculo opaco/sólido detectado na linha de disparo.")
     else
-        -- Verificação de colisão física real em Workspace
+        -- Verificação de colisão física real em Workspace com suporte a RaycastParams
+        local hasNativePhysics = false
         local raySuccess, rayResult = pcall(function()
             if typeof(Workspace) ~= "Instance" or not Workspace.Raycast then return nil end
+            hasNativePhysics = true
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
             params.IgnoreWater = true
+            params.RespectCanCollide = false
             local ignoreList = {}
             for _, f in ipairs(self.FilterInstances) do table.insert(ignoreList, f) end
             local tracers = Workspace:FindFirstChild("DeepHat_Tracers")
             if tracers then table.insert(ignoreList, tracers) end
+            local espCont = Workspace:FindFirstChild("DeepHat_ESP_Container")
+            if espCont then table.insert(ignoreList, espCont) end
             params.FilterDescendantsInstances = ignoreList
 
             if trajectoryPoints and #trajectoryPoints >= 2 then
@@ -633,6 +638,12 @@ function VectorTracker:SimulateShot(
                 outcomeDesc = string.format("Obstáculo bloqueando o projétil: colidiu com '%s' antes do alvo.", hitPart.Name)
                 table.insert(stages, string.format("[4] COLISÃO VERIFICADA [FALHA]: Interceptado por obstáculo '%s'.", hitPart.Name))
             end
+        elseif hasNativePhysics and targetInstance ~= nil then
+            -- No Studio real, se o raycast não atingiu nada ao disparar em um alvo esperado
+            hit = false
+            outcome = "INVALID_TRAJECTORY"
+            outcomeDesc = "Disparo falhou: raycast físico não interceptou a geometria do alvo sintético."
+            table.insert(stages, "[4] COLISÃO VERIFICADA [FALHA]: Nenhuma colisão física detectada ao longo da trajetória.")
         else
             -- Em ambiente sem raycast nativo (offline/mocks), verificação geométrica
             hit = true
