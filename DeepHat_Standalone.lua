@@ -40,6 +40,7 @@ local UserInputService = game:GetService("UserInputService")
 local CoreGuiService = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
 local CollectionService = game:GetService("CollectionService")
+local Debris = game:GetService("Debris")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera") :: Camera
@@ -78,6 +79,13 @@ do
             TeamCheck = false,
             TargetRegion = "Head",
             TargetBone = "Head",
+            TargetPriority = "Crosshair",
+            TargetStickiness = 0.25,
+            MaxAngularVelocityClamp = true,
+            SilentAimEnabled = false,
+            SilentAimFOV = 35.0,
+            SilentAimHitChance = 100.0,
+            SilentAimTracer = true,
             WatchdogEnabled = true,
             DebugLogging = false,
         },
@@ -109,6 +117,13 @@ do
             TeamCheck = true,
             TargetRegion = "Torso",
             TargetBone = "Torso",
+            TargetPriority = "Crosshair",
+            TargetStickiness = 0.35,
+            MaxAngularVelocityClamp = true,
+            SilentAimEnabled = false,
+            SilentAimFOV = 20.0,
+            SilentAimHitChance = 80.0,
+            SilentAimTracer = true,
             WatchdogEnabled = true,
             DebugLogging = false,
         },
@@ -140,6 +155,13 @@ do
             TeamCheck = false,
             TargetRegion = "Head",
             TargetBone = "Head",
+            TargetPriority = "Crosshair",
+            TargetStickiness = 0.20,
+            MaxAngularVelocityClamp = true,
+            SilentAimEnabled = false,
+            SilentAimFOV = 40.0,
+            SilentAimHitChance = 95.0,
+            SilentAimTracer = true,
             WatchdogEnabled = true,
             DebugLogging = false,
         },
@@ -171,6 +193,13 @@ do
             TeamCheck = false,
             TargetRegion = "Head",
             TargetBone = "Head",
+            TargetPriority = "Crosshair",
+            TargetStickiness = 0.10,
+            MaxAngularVelocityClamp = false,
+            SilentAimEnabled = true,
+            SilentAimFOV = 60.0,
+            SilentAimHitChance = 100.0,
+            SilentAimTracer = true,
             WatchdogEnabled = true,
             DebugLogging = true,
         },
@@ -202,6 +231,13 @@ do
             TeamCheck = false,
             TargetRegion = "Head",
             TargetBone = "Head",
+            TargetPriority = "Crosshair",
+            TargetStickiness = 0.25,
+            MaxAngularVelocityClamp = true,
+            SilentAimEnabled = false,
+            SilentAimFOV = 35.0,
+            SilentAimHitChance = 100.0,
+            SilentAimTracer = true,
             WatchdogEnabled = true,
             DebugLogging = false,
         }
@@ -293,6 +329,8 @@ do
         self.CandidatePool = {} :: { Instance }
         self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
         self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Entities", "Targets" }
+        self.LockedTarget = nil :: Instance?
+        self.LockExpiry = 0
         return self
     end
 
@@ -425,14 +463,22 @@ do
         maxRadius: number,
         maxFovDeg: number,
         preferredBone: string?,
-        teamCheck: boolean?
-    ): (Instance?, Vector3?, number, number, string)
+        teamCheck: boolean?,
+        priorityMode: string?,
+        stickinessDuration: number?
+    ): (Instance?, Vector3?, number, number, string, number)
         local candidates = self:ScanCandidates(teamCheck)
         local bestTarget: Instance? = nil
         local bestPos: Vector3? = nil
-        local bestAngle = maxFovDeg
-        local bestDist = maxRadius
-        local bestLabel = "None"
+        local bestScore = math.huge
+        local finalAngle = maxFovDeg
+        local finalDist = maxRadius
+        local finalLabel = "None"
+        local finalHealth = 100
+
+        local mode = priorityMode or "Crosshair"
+        local now = os.clock()
+        local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
 
         for _, obj in ipairs(candidates) do
             local pos, _, label = self:ResolvePivotPosition(obj, preferredBone)
@@ -443,18 +489,45 @@ do
                     local dir = displacement / dist
                     local dot = math.clamp(camLookVector:Dot(dir), -1.0, 1.0)
                     local angleDeg = math.deg(math.acos(dot))
-                    if angleDeg <= bestAngle then
-                        bestAngle = angleDeg
-                        bestTarget = obj
-                        bestPos = pos
-                        bestDist = dist
-                        bestLabel = label
+                    if angleDeg <= maxFovDeg then
+                        local hum = obj:FindFirstChildOfClass("Humanoid") or (obj:IsA("Model") and obj:FindFirstChildWhichIsA("Humanoid", true))
+                        local health = hum and hum.Health or 100
+
+                        local score = 0
+                        if mode == "Distance" then
+                            score = dist
+                        elseif mode == "LowestHealth" then
+                            score = health + (angleDeg * 0.25)
+                        else -- "Crosshair"
+                            score = angleDeg
+                        end
+
+                        if isStickyActive and obj == self.LockedTarget then
+                            score = score * 0.65
+                        end
+
+                        if score < bestScore then
+                            bestScore = score
+                            bestTarget = obj
+                            bestPos = pos
+                            finalAngle = angleDeg
+                            finalDist = dist
+                            finalLabel = label
+                            finalHealth = health
+                        end
                     end
                 end
             end
         end
 
-        return bestTarget, bestPos, bestDist, bestAngle, bestLabel
+        if bestTarget then
+            self.LockedTarget = bestTarget
+            self.LockExpiry = now + (stickinessDuration or 0.25)
+        else
+            self.LockedTarget = nil
+        end
+
+        return bestTarget, bestPos, finalDist, finalAngle, finalLabel, finalHealth
     end
 end
 
@@ -523,7 +596,9 @@ do
         smoothingFactor: number,
         accelExponent: number?,
         simulateJitter: boolean?,
-        intensity: number?
+        intensity: number?,
+        maxAngularVel: number?,
+        clampMaxVel: boolean?
     ): (CFrame, number, number)
         local originPos = currentCFrame.Position
         local displacement = (targetPosition - originPos)
@@ -536,6 +611,11 @@ do
         local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
         local angularErrorDeg = math.deg(math.acos(dot))
 
+        -- Zona morta de micro-ajuste (previne tremores e oscilações minúsculas no alvo)
+        if angularErrorDeg < 0.12 then
+            return currentCFrame, angularErrorDeg, 0
+        end
+
         local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
 
         local normErr = math.clamp(angularErrorDeg / 70.0, 0.0, 1.0)
@@ -546,11 +626,19 @@ do
         local k = (baseAlpha * 26.0) * (0.35 + 0.65 * hermiteFactor)
         local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
+        -- Aplica clamp de velocidade angular máxima se requisitado
+        if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
+            local maxDegThisFrame = maxAngularVel * safeDt
+            if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
+                dynamicAlpha = math.clamp(maxDegThisFrame / math.max(angularErrorDeg, 0.001), 0.001, 1.0)
+            end
+        end
+
         local smoothedCFrame = currentCFrame:Lerp(targetRotation, dynamicAlpha)
 
         if simulateJitter and intensity and intensity > 0 then
             local now = os.clock()
-            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.3
+            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.25
             if jitterFactor > 0.01 then
                 local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
                 local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -581,6 +669,62 @@ do
         self.PreviousLookVector = targetRotation.LookVector
         self.CurrentCFrame = targetRotation
         return targetRotation, 0, angularVelocity
+    end
+
+    -- Simulação de Silent Aim (Vetor de Disparo Desacoplado)
+    function VectorTracker:ComputeSilentAimVector(
+        cameraCFrame: CFrame,
+        targetPosition: Vector3,
+        maxFovDeg: number,
+        hitChancePercent: number
+    ): (boolean, Vector3, number)
+        local eyePos = cameraCFrame.Position
+        local displacement = (targetPosition - eyePos)
+        local distance = displacement.Magnitude
+
+        if distance < EPSILON then
+            return false, cameraCFrame.LookVector, 0
+        end
+
+        local decoupledDirection = displacement / distance
+        local camForward = cameraCFrame.LookVector
+
+        local dot = math.clamp(camForward:Dot(decoupledDirection), -1.0, 1.0)
+        local discrepancyAngleDeg = math.deg(math.acos(dot))
+
+        if discrepancyAngleDeg > maxFovDeg then
+            return false, camForward, discrepancyAngleDeg
+        end
+
+        local chance = math.clamp(hitChancePercent or 100.0, 0.0, 100.0)
+        if (math.random() * 100.0) > chance then
+            return false, camForward, discrepancyAngleDeg
+        end
+
+        return true, decoupledDirection, discrepancyAngleDeg
+    end
+
+    -- Visualizador de Traçador (Tracer 3D para Validação Visual do Vetor de Disparo)
+    function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
+        local ok, _ = pcall(function()
+            local dist = (targetPos - origin).Magnitude
+            if dist < 0.1 then return end
+
+            local part = Instance.new("Part")
+            part.Name = "DeepHat_SilentAimTracer"
+            part.Anchored = true
+            part.CanCollide = false
+            part.CanTouch = false
+            part.CanQuery = false
+            part.Material = Enum.Material.Neon
+            part.Color = color or Color3.fromRGB(255, 45, 60)
+            part.Transparency = 0.25
+            part.Size = Vector3.new(0.08, 0.08, dist)
+            part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
+            part.Parent = Workspace
+
+            Debris:AddItem(part, duration or 0.12)
+        end)
     end
 end
 
@@ -1303,6 +1447,7 @@ do
 
         -- ABA 2: CAMERA
         local pageCamera = pages["Camera"]
+        CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
         CreateSliderField(pageCamera, "Campo de Visão Útil (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
         CreateSliderField(pageCamera, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
         CreateSliderField(pageCamera, "Velocidade Angular Máxima (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5)
@@ -1315,6 +1460,73 @@ do
         local pageSim = pages["Simulation"]
         CreateToggleField(pageSim, "Segurar Botão Direito para Focar (Hold to Aim)", "HoldToAim", SimConfig.Get("HoldToAim"))
         CreateToggleField(pageSim, "Simular Micro-Variações Orgânicas (Perlin Jitter)", "SimulateJitter", SimConfig.Get("SimulateJitter"))
+
+        -- Seletor de Prioridade de Alvos
+        local prioRow = Instance.new("Frame")
+        prioRow.Size = UDim2.new(1, 0, 0, 36)
+        prioRow.BackgroundColor3 = THEME.BG_INPUT
+        prioRow.BackgroundTransparency = 0.5
+        prioRow.Parent = pageSim
+        AddCorner(prioRow, 6)
+        AddStroke(prioRow, THEME.BORDER, 1)
+
+        local prioLbl = Instance.new("TextLabel")
+        prioLbl.Size = UDim2.new(0, 110, 1, 0)
+        prioLbl.Position = UDim2.new(0, 10, 0, 0)
+        prioLbl.BackgroundTransparency = 1
+        prioLbl.Font = Enum.Font.GothamMedium
+        prioLbl.TextSize = 11
+        prioLbl.TextColor3 = THEME.TEXT_MAIN
+        prioLbl.TextXAlignment = Enum.TextXAlignment.Left
+        prioLbl.Text = "Prioridade:"
+        prioLbl.Parent = prioRow
+
+        local prioButtons: { [string]: TextButton } = {}
+        local prioOptions = {
+            { Id = "Crosshair", Label = "Mira" },
+            { Id = "Distance", Label = "Distância" },
+            { Id = "LowestHealth", Label = "Menor Vida" },
+        }
+
+        local function UpdatePrioUI(activeId: string)
+            for id, btn in pairs(prioButtons) do
+                local isSel = (id == activeId)
+                btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+                btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            end
+        end
+
+        local prioGrid = Instance.new("Frame")
+        prioGrid.Size = UDim2.new(1, -125, 0, 24)
+        prioGrid.Position = UDim2.new(0, 115, 0.5, -12)
+        prioGrid.BackgroundTransparency = 1
+        prioGrid.Parent = prioRow
+
+        local prioLayout = Instance.new("UIGridLayout")
+        prioLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
+        prioLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
+        prioLayout.Parent = prioGrid
+
+        for _, opt in ipairs(prioOptions) do
+            local pBtn = Instance.new("TextButton")
+            pBtn.BackgroundColor3 = (SimConfig.Get("TargetPriority") == opt.Id) and THEME.ACCENT_RED or THEME.BG_WINDOW
+            pBtn.TextColor3 = (SimConfig.Get("TargetPriority") == opt.Id) and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            pBtn.Font = Enum.Font.GothamBold
+            pBtn.TextSize = 10
+            pBtn.Text = opt.Label
+            pBtn.Parent = prioGrid
+            AddCorner(pBtn, 4)
+            AddStroke(pBtn, THEME.BORDER, 1)
+            prioButtons[opt.Id] = pBtn
+
+            pBtn.MouseButton1Click:Connect(function()
+                SimConfig.Set("TargetPriority", opt.Id)
+                UpdatePrioUI(opt.Id)
+                DashboardGUI.AddDiagnosticLog("TARGETING", "Prioridade alterada para: " .. opt.Label, "INFO")
+            end)
+        end
+
+        CreateSliderField(pageSim, "Persistência no Alvo (Stickiness s)", "TargetStickiness", 0.05, 1.0, SimConfig.Get("TargetStickiness"), 0.05)
         CreateSliderField(pageSim, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1)
         CreateSliderField(pageSim, "Intensidade da Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1)
         CreateSliderField(pageSim, "Velocidade de Deslocamento (studs/s)", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1)
@@ -1322,7 +1534,7 @@ do
         CreateSliderField(pageSim, "Duração do Ciclo de Teste (s)", "CycleDuration", 5, 120, SimConfig.Get("CycleDuration"), 5)
         CreateSliderField(pageSim, "Agentes Concorrentes Simulados", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1)
 
-        -- ABA 4: LINHA DE VISÃO
+        -- ABA 4: LINHA DE VISÃO & SILENT AIM
         local pageVision = pages["Vision"]
         CreateToggleField(pageVision, "Realce Visual de Entidades (Highlights ESP)", "EnableESP", SimConfig.Get("EnableESP"))
         CreateToggleField(pageVision, "Exibir Círculo de FOV na Tela", "ShowFovCircle", SimConfig.Get("ShowFovCircle"))
@@ -1330,6 +1542,22 @@ do
         CreateToggleField(pageVision, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
         CreateToggleField(pageVision, "Ativar Predição Balística de Alvo (Lead Tracking)", "EnableLead", SimConfig.Get("EnableLead"))
         CreateSliderField(pageVision, "Velocidade Balística Simulada (studs/s)", "ProjectileSpeed", 300, 3000, SimConfig.Get("ProjectileSpeed"), 50)
+
+        -- Seção de Silent Aim
+        local silentHeader = Instance.new("TextLabel")
+        silentHeader.Size = UDim2.new(1, 0, 0, 18)
+        silentHeader.BackgroundTransparency = 1
+        silentHeader.Font = Enum.Font.GothamBold
+        silentHeader.TextSize = 11
+        silentHeader.TextColor3 = THEME.ACCENT_RED
+        silentHeader.TextXAlignment = Enum.TextXAlignment.Left
+        silentHeader.Text = "SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO)"
+        silentHeader.Parent = pageVision
+
+        CreateToggleField(pageVision, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
+        CreateSliderField(pageVision, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1)
+        CreateSliderField(pageVision, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5)
+        CreateToggleField(pageVision, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
 
         -- ABA 5: HITBOX
         local pageHitbox = pages["Hitbox"]
@@ -1780,6 +2008,7 @@ local BIND_NAME = "DeepHat_StandaloneKernelPipeline"
 pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
 
 local lastTelemetryTime = 0
+local lastTracerTime = 0
 RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt: number)
     pcall(function()
         local camera = Workspace.CurrentCamera
@@ -1788,6 +2017,13 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local isActive = SimConfig.Get("SimulationActive") == true
         if not isActive then
             Renderer:ClearAll()
+            DashboardGUI:UpdateTelemetryDisplay({
+                angularVelocity = 0,
+                isObstructed = false,
+                targetName = "PAUSADO",
+                dt = dt,
+                mode = "PAUSED"
+            })
             return
         end
 
@@ -1807,23 +2043,37 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local accelExp = tonumber(SimConfig.Get("AccelerationCurve")) or 1.25
         local simulateJitter = SimConfig.Get("SimulateJitter") == true
         local intensity = tonumber(SimConfig.Get("Intensity")) or 75.0
+        local maxAngularVel = tonumber(SimConfig.Get("AngularVelocity")) or 240.0
+        local clampMaxVel = SimConfig.Get("MaxAngularVelocityClamp") == true
+        local targetPriority = tostring(SimConfig.Get("TargetPriority") or "Crosshair")
+        local targetStickiness = tonumber(SimConfig.Get("TargetStickiness")) or 0.25
 
-        local bestTarget, targetPos, _, _, targetLabel = Detector:FindBestCandidate(
+        -- Silent Aim Config
+        local silentAimEnabled = SimConfig.Get("SilentAimEnabled") == true
+        local silentAimFov = tonumber(SimConfig.Get("SilentAimFOV")) or 35.0
+        local silentAimHitChance = tonumber(SimConfig.Get("SilentAimHitChance")) or 100.0
+        local silentAimTracer = SimConfig.Get("SilentAimTracer") == true
+
+        local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
             camera.CFrame.Position,
             camera.CFrame.LookVector,
             maxRadius,
             fov,
             preferredBone,
-            teamCheck
+            teamCheck,
+            targetPriority,
+            targetStickiness
         )
 
         local isObstructed = false
         local targetName = "NENHUM"
         local calculatedAngVel = 0
         local currentMode = "IDLE"
+        local decoupledAngle = 0
+        local silentAimActive = false
 
         if bestTarget and targetPos then
-            targetName = string.format("%s (%s)", bestTarget.Name, targetLabel)
+            targetName = string.format("%s (%s - %d HP)", bestTarget.Name, targetLabel, math.floor(targetHealth or 100))
             isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos)
 
             local isTargetValid = true
@@ -1841,19 +2091,53 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 Renderer:ClearAll()
             end
 
-            if shouldAim and isTargetValid then
-                currentMode = "TRACKING"
-                local smoothedCFrame, _, angVel = Tracker:ComputeSmoothRotation(
+            -- Simulação de Silent Aim (Vetor Desacoplado)
+            if silentAimEnabled and isTargetValid then
+                local isSilentHit, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
                     camera.CFrame,
                     aimPosition,
-                    dt,
-                    smoothing,
-                    accelExp,
-                    simulateJitter,
-                    intensity
+                    silentAimFov,
+                    silentAimHitChance
                 )
-                camera.CFrame = smoothedCFrame
-                calculatedAngVel = angVel
+                if isSilentHit then
+                    silentAimActive = true
+                    decoupledAngle = discDeg
+                    currentMode = "SILENT_AIM"
+
+                    local now = os.clock()
+                    if silentAimTracer and shouldAim and (now - lastTracerTime) >= 0.065 then
+                        lastTracerTime = now
+                        local muzzlePos = camera.CFrame.Position + camera.CFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
+                        Tracker:DrawTracerBeam(muzzlePos, aimPosition, Color3.fromRGB(255, 60, 75), 0.12)
+                    end
+                end
+            end
+
+            -- Interpolação Cinemática da Câmera (Aimbot)
+            if shouldAim and isTargetValid and not silentAimActive then
+                currentMode = "TRACKING"
+
+                local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
+                if isAggressive and (SimConfig.Get("Smoothing") or 0.1) <= 0.02 then
+                    currentMode = "SNAP"
+                    local snapCFrame, _, angVel = Tracker:ComputeSnapRotation(camera.CFrame, aimPosition, dt)
+                    camera.CFrame = snapCFrame
+                    calculatedAngVel = angVel
+                else
+                    local smoothedCFrame, _, angVel = Tracker:ComputeSmoothRotation(
+                        camera.CFrame,
+                        aimPosition,
+                        dt,
+                        smoothing,
+                        accelExp,
+                        simulateJitter,
+                        intensity,
+                        maxAngularVel,
+                        clampMaxVel
+                    )
+                    camera.CFrame = smoothedCFrame
+                    calculatedAngVel = angVel
+                end
             end
         else
             Renderer:ClearAll()

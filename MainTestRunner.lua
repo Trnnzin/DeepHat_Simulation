@@ -99,6 +99,25 @@ local targetVelocity = Vector3.new(0, 0, 20)
 local predictedPos = tracker:ComputeLead(targetInitial, targetVelocity, Vector3.zero, 1000, true)
 Assert(predictedPos.Z > targetInitial.Z, "Predição balística antecipou o vetor de deslocamento do alvo")
 
+-- 5. Teste de Clamp de Velocidade Angular Máxima
+local largeTargetPos = Vector3.new(0, 5, -100) -- Alvo 180 graus atrás
+local _, _, unconstrainedVel = tracker:ComputeSmoothRotation(originCFrame, largeTargetPos, 0.016, 0.8, 1.0, false, 0, 180, false)
+local _, _, clampedVel = tracker:ComputeSmoothRotation(originCFrame, largeTargetPos, 0.016, 0.8, 1.0, false, 0, 180, true)
+Assert(clampedVel <= 185.0, "Clamp estrito de velocidade angular limitou a rotação ao teto físico configurado (<= 180°/s)")
+
+-- 6. Teste de Silent Aim (Vetor Desacoplado da Câmera)
+local silentTargetPos = Vector3.new(20, 5, 50) -- Ângulo de ~21.8 graus
+local isRedirected, decoupledDir, discDeg = tracker:ComputeSilentAimVector(originCFrame, silentTargetPos, 35.0, 100.0)
+Assert(isRedirected == true, "Silent Aim redirecionou disparo para alvo dentro do FOV de atuação")
+Assert(discDeg > 15.0 and discDeg < 30.0, "Discrepância angular calculada com precisão trigonométrica")
+local expectedDir = (silentTargetPos - originCFrame.Position).Unit
+Assert((decoupledDir - expectedDir).Magnitude < 0.001, "Vetor de disparo desacoplado alinhado com o alvo real")
+
+-- 7. Teste de Silent Aim Fora do Limite de FOV
+local outOfFovTarget = Vector3.new(100, 5, 10) -- Ângulo > 70 graus
+local isOutRedirected, _, outDisc = tracker:ComputeSilentAimVector(originCFrame, outOfFovTarget, 25.0, 100.0)
+Assert(isOutRedirected == false, "Silent Aim rejeitou redirecionamento fora do raio angular configurado")
+
 -- -------------------------------------------------------------------------
 -- [TEST SUITE 3] SESSÃO DE TESTES CONTROLADA (DETECÇÃO DE ANOMALIAS)
 -- -------------------------------------------------------------------------
@@ -137,6 +156,35 @@ Assert(avgNormal < 40.0, "Perfil Normal gerou score médio de suspeita baixo (< 
 local avgAgressivo = RunControlledSession("AGRESSIVO", 25)
 print(string.format("  Média de Suspeita (Perfil AGRESSIVO): %.1f%%", avgAgressivo))
 Assert(avgAgressivo > 65.0, "Perfil Agressivo disparou alertas heurísticos de anomalia (> 65%)")
+
+-- -------------------------------------------------------------------------
+-- [TEST SUITE 4] DETECÇÃO HEURÍSTICA DE SILENT AIM NO ENGINECORE
+-- -------------------------------------------------------------------------
+print("\n[SUITE 4] Validando Detecção Heurística de Silent Aim...")
+
+local silentReportMod = Engine:CalculateSuspicion({
+    angularVelocity = 120,
+    decoupledAngleDeg = 22.5,
+    isSnap = false
+})
+Assert(silentReportMod.totalScore >= 45, "EngineCore detectou anomalia moderada de Silent Aim (score >= 45)")
+local hasModFlag = false
+for _, f in ipairs(silentReportMod.anomalies) do
+    if f:find("DISCREPANCIA_SILENT_AIM") then hasModFlag = true end
+end
+Assert(hasModFlag == true, "EngineCore emitiu flag 'DISCREPANCIA_SILENT_AIM'")
+
+local silentReportCrit = Engine:CalculateSuspicion({
+    angularVelocity = 80,
+    decoupledAngleDeg = 42.0,
+    isSnap = false
+})
+Assert(silentReportCrit.totalScore >= 65, "EngineCore detectou Silent Aim crítico (> 35°)")
+local hasCritFlag = false
+for _, f in ipairs(silentReportCrit.anomalies) do
+    if f:find("SILENT_AIM_CRITICO") then hasCritFlag = true end
+end
+Assert(hasCritFlag == true, "EngineCore emitiu flag 'SILENT_AIM_CRITICO'")
 
 -- -------------------------------------------------------------------------
 -- RESUMO FINAL

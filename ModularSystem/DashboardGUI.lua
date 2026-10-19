@@ -737,6 +737,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- [ABA 2] CÂMERA & VETORES
     -- =========================================================================
     local pageCamera = pages["Camera"]
+    CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
     CreateSliderField(pageCamera, "Campo de Visão Útil (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
     CreateSliderField(pageCamera, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
     CreateSliderField(pageCamera, "Velocidade Angular Máxima (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 5)
@@ -751,6 +752,73 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     local pageSim = pages["Simulation"]
     CreateToggleField(pageSim, "Segurar Botão Direito para Focar (Hold to Aim)", "HoldToAim", SimConfig.Get("HoldToAim"))
     CreateToggleField(pageSim, "Simular Micro-Variações Orgânicas (Perlin Jitter)", "SimulateJitter", SimConfig.Get("SimulateJitter"))
+
+    -- Seletor de Prioridade de Alvos
+    local prioRow = Instance.new("Frame")
+    prioRow.Size = UDim2.new(1, 0, 0, 36)
+    prioRow.BackgroundColor3 = THEME.BG_INPUT
+    prioRow.BackgroundTransparency = 0.5
+    prioRow.Parent = pageSim
+    AddCorner(prioRow, 6)
+    AddStroke(prioRow, THEME.BORDER, 1)
+
+    local prioLbl = Instance.new("TextLabel")
+    prioLbl.Size = UDim2.new(0, 110, 1, 0)
+    prioLbl.Position = UDim2.new(0, 10, 0, 0)
+    prioLbl.BackgroundTransparency = 1
+    prioLbl.Font = Enum.Font.GothamMedium
+    prioLbl.TextSize = 11
+    prioLbl.TextColor3 = THEME.TEXT_MAIN
+    prioLbl.TextXAlignment = Enum.TextXAlignment.Left
+    prioLbl.Text = "Prioridade:"
+    prioLbl.Parent = prioRow
+
+    local prioButtons: { [string]: TextButton } = {}
+    local prioOptions = {
+        { Id = "Crosshair", Label = "Mira" },
+        { Id = "Distance", Label = "Distância" },
+        { Id = "LowestHealth", Label = "Menor Vida" },
+    }
+
+    local function UpdatePrioUI(activeId: string)
+        for id, btn in pairs(prioButtons) do
+            local isSel = (id == activeId)
+            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        end
+    end
+
+    local prioGrid = Instance.new("Frame")
+    prioGrid.Size = UDim2.new(1, -125, 0, 24)
+    prioGrid.Position = UDim2.new(0, 115, 0.5, -12)
+    prioGrid.BackgroundTransparency = 1
+    prioGrid.Parent = prioRow
+
+    local prioLayout = Instance.new("UIGridLayout")
+    prioLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
+    prioLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
+    prioLayout.Parent = prioGrid
+
+    for _, opt in ipairs(prioOptions) do
+        local pBtn = Instance.new("TextButton")
+        pBtn.BackgroundColor3 = (SimConfig.Get("TargetPriority") == opt.Id) and THEME.ACCENT_RED or THEME.BG_WINDOW
+        pBtn.TextColor3 = (SimConfig.Get("TargetPriority") == opt.Id) and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        pBtn.Font = Enum.Font.GothamBold
+        pBtn.TextSize = 10
+        pBtn.Text = opt.Label
+        pBtn.Parent = prioGrid
+        AddCorner(pBtn, 4)
+        AddStroke(pBtn, THEME.BORDER, 1)
+        prioButtons[opt.Id] = pBtn
+
+        pBtn.MouseButton1Click:Connect(function()
+            SimConfig.Set("TargetPriority", opt.Id)
+            UpdatePrioUI(opt.Id)
+            DashboardGUI.AddDiagnosticLog("TARGETING", "Prioridade alterada para: " .. opt.Label, "INFO")
+        end)
+    end
+
+    CreateSliderField(pageSim, "Persistência no Alvo (Stickiness s)", "TargetStickiness", 0.05, 1.0, SimConfig.Get("TargetStickiness"), 0.05)
     CreateSliderField(pageSim, "Frequência de Eventos (Hz)", "EventFrequency", 1, 60, SimConfig.Get("EventFrequency"), 1)
     CreateSliderField(pageSim, "Intensidade da Resposta (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 1)
     CreateSliderField(pageSim, "Velocidade de Deslocamento (studs/s)", "MoveSpeed", 8, 40, SimConfig.Get("MoveSpeed"), 1)
@@ -759,7 +827,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     CreateSliderField(pageSim, "Agentes Concorrentes Simulados", "SimulatedAgents", 1, 16, SimConfig.Get("SimulatedAgents"), 1)
 
     -- =========================================================================
-    -- [ABA 4] LINHA DE VISÃO & ESP
+    -- [ABA 4] LINHA DE VISÃO & SILENT AIM
     -- =========================================================================
     local pageVision = pages["Vision"]
     CreateToggleField(pageVision, "Realce Visual de Entidades (Highlights ESP)", "EnableESP", SimConfig.Get("EnableESP"))
@@ -768,6 +836,22 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     CreateToggleField(pageVision, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
     CreateToggleField(pageVision, "Ativar Predição Balística de Alvo (Lead Tracking)", "EnableLead", SimConfig.Get("EnableLead"))
     CreateSliderField(pageVision, "Velocidade Balística Simulada (studs/s)", "ProjectileSpeed", 300, 3000, SimConfig.Get("ProjectileSpeed"), 50)
+
+    -- Seção de Silent Aim
+    local silentHeader = Instance.new("TextLabel")
+    silentHeader.Size = UDim2.new(1, 0, 0, 18)
+    silentHeader.BackgroundTransparency = 1
+    silentHeader.Font = Enum.Font.GothamBold
+    silentHeader.TextSize = 11
+    silentHeader.TextColor3 = THEME.ACCENT_RED
+    silentHeader.TextXAlignment = Enum.TextXAlignment.Left
+    silentHeader.Text = "SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO)"
+    silentHeader.Parent = pageVision
+
+    CreateToggleField(pageVision, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
+    CreateSliderField(pageVision, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1)
+    CreateSliderField(pageVision, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5)
+    CreateToggleField(pageVision, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
 
     -- =========================================================================
     -- [ABA 5] MAPEAMENTO HITBOX (MANEQUIM INTERATIVO)

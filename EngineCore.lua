@@ -16,6 +16,7 @@ export type KinematicMetrics = {
     consecutiveOccludedFrames: number?, -- Frames seguidos mirando através da parede
     accelerationJitter: number?,   -- Desvio padrão de aceleração
     linearSpeed: number?,          -- Velocidade linear (studs/s)
+    decoupledAngleDeg: number?,    -- Discrepância entre LookVector da câmera e vetor do projétil (Silent Aim)
 }
 
 export type SuspicionReport = {
@@ -92,6 +93,16 @@ function Engine:CalculateSuspicion(metrics: KinematicMetrics): SuspicionReport
     if linSpeed > 28.0 then
         score = score + 30
         table.insert(flags, string.format("DESLOCAMENTO_ANOMALO (%.1f studs/s)", linSpeed))
+    end
+
+    -- 5. Detecção de Silent Aim (Vetor de Disparo Desacoplado da Orientação da Câmera)
+    local decoupledAngle = metrics.decoupledAngleDeg or 0
+    if decoupledAngle > 35.0 then
+        score = score + 65
+        table.insert(flags, string.format("SILENT_AIM_CRITICO (Discrepância: %.1f°)", decoupledAngle))
+    elseif decoupledAngle > 15.0 then
+        score = score + 45
+        table.insert(flags, string.format("DISCREPANCIA_SILENT_AIM (Discrepância: %.1f°)", decoupledAngle))
     end
 
     local finalScore = math.clamp(score, 0, 100)

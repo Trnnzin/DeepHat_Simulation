@@ -1,10 +1,14 @@
 --!strict
+-- =========================================================================
 -- VectorTracker.lua
--- Pilar 2: Motor de Rotação, Interpolação Vetorial e Cinemática Avançada
+-- Pilar 2: Motor de Rotação, Interpolação Vetorial, Trajetória e Silent Aim
 -- CFrame.lookAt com Lerp contínuo independente de framerate (Exponential Decay),
--- Proteção Epsilon (1e-4), Jitter Orgânico Perlin Noise e Cálculo Instantâneo de Velocidade Angular
+-- Proteção Epsilon (1e-4), Jitter Orgânico Perlin Noise, Clamp de Velocidade Angular
+-- e Cálculo de Trajetória Desacoplada (Silent Aim Simulation Rig)
+-- =========================================================================
 
 local Workspace = game:GetService("Workspace")
+local Debris = game:GetService("Debris")
 
 local VectorTracker = {}
 VectorTracker.__index = VectorTracker
@@ -81,7 +85,7 @@ function VectorTracker:ComputeLead(targetPos: Vector3, targetVel: Vector3, eyePo
     return targetPos + (targetVel * timeToHit)
 end
 
--- Cálculo de Rotação Suavizada (Lerp com DeltaTime, Guarda Epsilon, Aceleração Hermite e Jitter)
+-- Cálculo de Rotação Suavizada com Limite Físico de Velocidade Angular
 function VectorTracker:ComputeSmoothRotation(
     currentCFrame: CFrame,
     targetPosition: Vector3,
@@ -89,7 +93,9 @@ function VectorTracker:ComputeSmoothRotation(
     smoothingFactor: number,
     accelExponent: number?,
     simulateJitter: boolean?,
-    intensity: number?
+    intensity: number?,
+    maxAngularVel: number?,
+    clampMaxVel: boolean?
 ): (CFrame, number, number)
     local originPos = currentCFrame.Position
     local displacement = (targetPosition - originPos)
@@ -108,6 +114,11 @@ function VectorTracker:ComputeSmoothRotation(
     local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
     local angularErrorDeg = math.deg(math.acos(dot))
 
+    -- Zona morta de micro-ajuste (previne tremores e oscilações minúsculas no alvo)
+    if angularErrorDeg < 0.12 then
+        return currentCFrame, angularErrorDeg, 0
+    end
+
     -- Matriz de Orientação Alvo via CFrame.lookAt
     local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
 
@@ -122,12 +133,20 @@ function VectorTracker:ComputeSmoothRotation(
     local k = (baseAlpha * 26.0) * (0.35 + 0.65 * hermiteFactor)
     local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
+    -- Aplica clamp de velocidade angular máxima se requisitado
+    if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
+        local maxDegThisFrame = maxAngularVel * safeDt
+        if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
+            dynamicAlpha = math.clamp(maxDegThisFrame / math.max(angularErrorDeg, 0.001), 0.001, 1.0)
+        end
+    end
+
     local smoothedCFrame = currentCFrame:Lerp(targetRotation, dynamicAlpha)
 
     -- Injeção de Jitter Perlin Noise caso habilitado
     if simulateJitter and intensity and intensity > 0 then
         local now = os.clock()
-        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.3
+        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.25
         if jitterFactor > 0.01 then
             local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
             local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -148,29 +167,81 @@ function VectorTracker:ComputeSmoothRotation(
 end
 
 -- Modo Snap Instantâneo (1 frame) para testes de Anomaly Detection
-function VectorTracker:ComputeSnapRotation(
-    currentCFrame: CFrame,
-    targetPosition: Vector3,
-    dt: number
-): (CFrame, number, number)
+function VectorTracker:ComputeSnapRotation(currentCFrame: CFrame, targetPosition: Vector3, dt: number): (CFrame, number, number)
     local originPos = currentCFrame.Position
     local displacement = (targetPosition - originPos)
-    local distance = displacement.Magnitude
-
-    if distance < EPSILON then
-        return currentCFrame, 0, 0
-    end
+    if displacement.Magnitude < EPSILON then return currentCFrame, 0, 0 end
 
     local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
     local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
-
     local deltaDot = math.clamp(currentCFrame.LookVector:Dot(targetRotation.LookVector), -1.0, 1.0)
     local angularVelocity = math.deg(math.acos(deltaDot)) / safeDt
 
     self.PreviousLookVector = targetRotation.LookVector
     self.CurrentCFrame = targetRotation
-
     return targetRotation, 0, angularVelocity
+end
+
+-- =========================================================================
+-- SIMULAÇÃO DE SILENT AIM (VETOR DE DISPARO DESACOPLADO DA CÂMERA)
+-- =========================================================================
+-- Calcula a trajetória de projétil/disparo redirecionada para o alvo SEM mover a câmera.
+-- Retorna se o disparo foi redirecionado, o vetor de direção redirecionado e a discrepância angular.
+function VectorTracker:ComputeSilentAimVector(
+    cameraCFrame: CFrame,
+    targetPosition: Vector3,
+    maxFovDeg: number,
+    hitChancePercent: number
+): (boolean, Vector3, number)
+    local eyePos = cameraCFrame.Position
+    local displacement = (targetPosition - eyePos)
+    local distance = displacement.Magnitude
+
+    if distance < EPSILON then
+        return false, cameraCFrame.LookVector, 0
+    end
+
+    local decoupledDirection = displacement / distance
+    local camForward = cameraCFrame.LookVector
+
+    local dot = math.clamp(camForward:Dot(decoupledDirection), -1.0, 1.0)
+    local discrepancyAngleDeg = math.deg(math.acos(dot))
+
+    -- Verifica se o alvo está dentro do cone angular de atuação do Silent Aim
+    if discrepancyAngleDeg > maxFovDeg then
+        return false, camForward, discrepancyAngleDeg
+    end
+
+    -- Sorteio de probabilidade de acerto (Hit Chance)
+    local chance = math.clamp(hitChancePercent or 100.0, 0.0, 100.0)
+    if (math.random() * 100.0) > chance then
+        return false, camForward, discrepancyAngleDeg
+    end
+
+    return true, decoupledDirection, discrepancyAngleDeg
+end
+
+-- Visualizador de Traçador (Tracer 3D para Validação Visual do Vetor de Disparo)
+function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
+    local ok, _ = pcall(function()
+        local dist = (targetPos - origin).Magnitude
+        if dist < 0.1 then return end
+
+        local part = Instance.new("Part")
+        part.Name = "DeepHat_SilentAimTracer"
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+        part.Material = Enum.Material.Neon
+        part.Color = color or Color3.fromRGB(255, 45, 60)
+        part.Transparency = 0.25
+        part.Size = Vector3.new(0.08, 0.08, dist)
+        part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
+        part.Parent = Workspace
+
+        Debris:AddItem(part, duration or 0.12)
+    end)
 end
 
 return VectorTracker

@@ -25,6 +25,8 @@ function InstanceDetector.new(scanInterval: number?)
     self.LocalPlayer = Players.LocalPlayer
     self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
     self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
+    self.LockedTarget = nil :: Instance?
+    self.LockExpiry = 0
     return self
 end
 
@@ -207,21 +209,29 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
     return self.CandidatePool
 end
 
--- Filtro de Distância (Magnitude) e Ângulo
+-- Filtro de Distância (Magnitude), Ângulo e Prioridades (Crosshair, Distância, Menor Vida)
 function InstanceDetector:FindBestCandidate(
     originPos: Vector3,
     camLookVector: Vector3,
     maxRadius: number,
     maxFovDeg: number,
     preferredBone: string?,
-    teamCheck: boolean?
-): (Instance?, Vector3?, number, number, string)
+    teamCheck: boolean?,
+    priorityMode: string?,
+    stickinessDuration: number?
+): (Instance?, Vector3?, number, number, string, number)
     local candidates = self:ScanCandidates(teamCheck)
     local bestTarget: Instance? = nil
     local bestPos: Vector3? = nil
-    local bestAngle = maxFovDeg
-    local bestDist = maxRadius
-    local bestLabel = "None"
+    local bestScore = math.huge
+    local finalAngle = maxFovDeg
+    local finalDist = maxRadius
+    local finalLabel = "None"
+    local finalHealth = 100
+
+    local mode = priorityMode or "Crosshair"
+    local now = os.clock()
+    local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
 
     for _, obj in ipairs(candidates) do
         local pos, _, label = self:ResolvePivotPosition(obj, preferredBone)
@@ -229,24 +239,53 @@ function InstanceDetector:FindBestCandidate(
             local displacement = (pos - originPos)
             local dist = displacement.Magnitude
 
-            -- Filtro de Magnitude Euclidiana (Threshold)
+            -- Filtro de Raio
             if dist <= maxRadius and dist >= 0.05 then
                 local dir = displacement / dist
                 local dot = math.clamp(camLookVector:Dot(dir), -1.0, 1.0)
                 local angleDeg = math.deg(math.acos(dot))
 
-                if angleDeg <= bestAngle then
-                    bestAngle = angleDeg
-                    bestTarget = obj
-                    bestPos = pos
-                    bestDist = dist
-                    bestLabel = label
+                -- Filtro de Campo de Visão (FOV)
+                if angleDeg <= maxFovDeg then
+                    local hum = obj:FindFirstChildOfClass("Humanoid") or (obj:IsA("Model") and obj:FindFirstChildWhichIsA("Humanoid", true))
+                    local health = hum and hum.Health or 100
+
+                    local score = 0
+                    if mode == "Distance" then
+                        score = dist
+                    elseif mode == "LowestHealth" then
+                        score = health + (angleDeg * 0.25)
+                    else -- "Crosshair"
+                        score = angleDeg
+                    end
+
+                    -- Bônus de Stickiness para o alvo atualmente travado (evita alternância errática / flickering)
+                    if isStickyActive and obj == self.LockedTarget then
+                        score = score * 0.65
+                    end
+
+                    if score < bestScore then
+                        bestScore = score
+                        bestTarget = obj
+                        bestPos = pos
+                        finalAngle = angleDeg
+                        finalDist = dist
+                        finalLabel = label
+                        finalHealth = health
+                    end
                 end
             end
         end
     end
 
-    return bestTarget, bestPos, bestDist, bestAngle, bestLabel
+    if bestTarget then
+        self.LockedTarget = bestTarget
+        self.LockExpiry = now + (stickinessDuration or 0.25)
+    else
+        self.LockedTarget = nil
+    end
+
+    return bestTarget, bestPos, finalDist, finalAngle, finalLabel, finalHealth
 end
 
 return InstanceDetector

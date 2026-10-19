@@ -43,9 +43,18 @@ export type ProfileData = {
     TeamCheck: boolean,         -- Ignorar companheiros de equipe
     WallOcclusionCheck: boolean,-- Verificacao de oclusao por Raycast
 
-    -- Aba Mapeamento HitBox
+    -- Aba Mapeamento HitBox & Seleção de Alvos
     TargetRegion: string,       -- "Head", "Torso", "Arms", "Legs"
     TargetBone: string,
+    TargetPriority: string,     -- "Crosshair", "Distance", "LowestHealth"
+    TargetStickiness: number,   -- Tempo de persistência no alvo para evitar jitter de troca (s) [0.0 - 1.0]
+    MaxAngularVelocityClamp: boolean, -- Forçar limite estrito de velocidade angular máxima
+
+    -- Simulação de Silent Aim (Vetor de Disparo Desacoplado para Testes de Anti-Cheat)
+    SilentAimEnabled: boolean,   -- Simular redirecionamento de projétil sem mover a câmera
+    SilentAimFOV: number,       -- Ângulo de ativação do Silent Aim (graus) [5 - 90]
+    SilentAimHitChance: number, -- Probabilidade de redirecionamento (%) [0 - 100]
+    SilentAimTracer: boolean,   -- Desenhar traçador visual do vetor de disparo desacoplado
 
     -- Diagnosticos e Seguranca
     WatchdogEnabled: boolean,   -- Verificacao continua de integridade em segundo plano
@@ -82,6 +91,13 @@ local PROFILES: { [string]: ProfileData } = {
         WallOcclusionCheck = true,
         TargetRegion = "Head",
         TargetBone = "Head",
+        TargetPriority = "Crosshair",
+        TargetStickiness = 0.25,
+        MaxAngularVelocityClamp = true,
+        SilentAimEnabled = false,
+        SilentAimFOV = 35.0,
+        SilentAimHitChance = 100.0,
+        SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
     },
@@ -114,6 +130,13 @@ local PROFILES: { [string]: ProfileData } = {
         WallOcclusionCheck = true,
         TargetRegion = "Torso",
         TargetBone = "Torso",
+        TargetPriority = "Crosshair",
+        TargetStickiness = 0.35,
+        MaxAngularVelocityClamp = true,
+        SilentAimEnabled = false,
+        SilentAimFOV = 20.0,
+        SilentAimHitChance = 80.0,
+        SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
     },
@@ -146,6 +169,13 @@ local PROFILES: { [string]: ProfileData } = {
         WallOcclusionCheck = true,
         TargetRegion = "Head",
         TargetBone = "Head",
+        TargetPriority = "Crosshair",
+        TargetStickiness = 0.20,
+        MaxAngularVelocityClamp = true,
+        SilentAimEnabled = false,
+        SilentAimFOV = 40.0,
+        SilentAimHitChance = 95.0,
+        SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
     },
@@ -178,6 +208,13 @@ local PROFILES: { [string]: ProfileData } = {
         WallOcclusionCheck = true,
         TargetRegion = "Head",
         TargetBone = "Head",
+        TargetPriority = "Crosshair",
+        TargetStickiness = 0.10,
+        MaxAngularVelocityClamp = false,
+        SilentAimEnabled = true,
+        SilentAimFOV = 60.0,
+        SilentAimHitChance = 100.0,
+        SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = true,
     },
@@ -210,6 +247,13 @@ local PROFILES: { [string]: ProfileData } = {
         WallOcclusionCheck = true,
         TargetRegion = "Head",
         TargetBone = "Head",
+        TargetPriority = "Crosshair",
+        TargetStickiness = 0.25,
+        MaxAngularVelocityClamp = true,
+        SilentAimEnabled = false,
+        SilentAimFOV = 35.0,
+        SilentAimHitChance = 100.0,
+        SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
     }
@@ -245,6 +289,13 @@ local CurrentState: ProfileData = {
     WallOcclusionCheck = true,
     TargetRegion = "Head",
     TargetBone = "Head",
+    TargetPriority = "Crosshair",
+    TargetStickiness = 0.25,
+    MaxAngularVelocityClamp = true,
+    SilentAimEnabled = false,
+    SilentAimFOV = 35.0,
+    SilentAimHitChance = 100.0,
+    SilentAimTracer = true,
     WatchdogEnabled = true,
     DebugLogging = false,
 }
