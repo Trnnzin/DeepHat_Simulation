@@ -7,6 +7,9 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
+-- Shared configuration used by target validation and test-target filtering.
+local SimConfig = require(script.Parent.SimConfig)
+
 local InstanceDetector = {}
 InstanceDetector.__index = InstanceDetector
 
