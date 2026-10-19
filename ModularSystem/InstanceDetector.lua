@@ -53,12 +53,24 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
         return false
     end
 
-    -- Autorização: personagens de jogadores reais são rejeitados incondicionalmente
-    if Players:GetPlayerFromCharacter(objeto) then
-        return false
+    -- Verificação de autorização e equipe para personagens de jogadores reais
+    local targetPlayer = Players:GetPlayerFromCharacter(objeto)
+    if not targetPlayer and objeto:IsA("BasePart") and objeto.Parent then
+        targetPlayer = Players:GetPlayerFromCharacter(objeto.Parent)
     end
-    if objeto:IsA("BasePart") and objeto.Parent and Players:GetPlayerFromCharacter(objeto.Parent) then
-        return false
+
+    if targetPlayer then
+        -- Se a configuração desativou alvos de jogadores, rejeita
+        if SimConfig.Get("AllowPlayerTargets") == false then
+            return false
+        end
+
+        -- Verificação de equipe (Team Check)
+        if teamCheck and self.LocalPlayer and self.LocalPlayer.Team and targetPlayer.Team then
+            if targetPlayer.Team == self.LocalPlayer.Team then
+                return false
+            end
+        end
     end
 
     -- Se o modelo possuir um Humanoid, respeita a integridade de vida
@@ -69,16 +81,11 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
 
     -- Modelos devem conter partes físicas válidas para serem alvos sintéticos
     if objeto:IsA("Model") then
-        local hasPart = objeto.PrimaryPart or objeto:FindFirstChildWhichIsA("BasePart", true)
+        local hasPart = objeto.PrimaryPart
+            or objeto:FindFirstChild("HumanoidRootPart", true)
+            or objeto:FindFirstChild("Head", true)
+            or objeto:FindFirstChildWhichIsA("BasePart", true)
         if not hasPart then
-            return false
-        end
-    end
-
-    -- Verificação de equipe para Jogadores
-    if teamCheck and self.LocalPlayer and self.LocalPlayer.Team then
-        local otherPlayer = Players:GetPlayerFromCharacter(objeto)
-        if otherPlayer and otherPlayer.Team == self.LocalPlayer.Team then
             return false
         end
     end
@@ -116,14 +123,18 @@ function InstanceDetector:ResolvePivotPosition(objeto: Instance, preferredBone: 
     elseif bone == "arms" then
         targetPart = model:FindFirstChild("RightUpperArm", true) :: BasePart?
             or model:FindFirstChild("RightArm", true) :: BasePart?
+            or model:FindFirstChild("Right Arm", true) :: BasePart?
             or model:FindFirstChild("LeftUpperArm", true) :: BasePart?
             or model:FindFirstChild("LeftArm", true) :: BasePart?
+            or model:FindFirstChild("Left Arm", true) :: BasePart?
         label = "Arms"
     elseif bone == "legs" then
         targetPart = model:FindFirstChild("RightUpperLeg", true) :: BasePart?
             or model:FindFirstChild("RightLeg", true) :: BasePart?
+            or model:FindFirstChild("Right Leg", true) :: BasePart?
             or model:FindFirstChild("LeftUpperLeg", true) :: BasePart?
             or model:FindFirstChild("LeftLeg", true) :: BasePart?
+            or model:FindFirstChild("Left Leg", true) :: BasePart?
         label = "Legs"
     end
 
@@ -187,8 +198,17 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
         end
     end
 
-    -- 1. (Removido) Personagens de jogadores reais NUNCA são candidatos: o conjunto
-    --    de alvos é restrito a manequins/NPCs sintéticos autorizados (ver IsValidTarget).
+    -- 1. Personagens de jogadores reais em ambiente de teste autorizado
+    if SimConfig.Get("AllowPlayerTargets") ~= false then
+        local okPlayers, allPlayers = pcall(function() return Players:GetPlayers() end)
+        if okPlayers and allPlayers then
+            for _, player in ipairs(allPlayers) do
+                if player ~= self.LocalPlayer and player.Character and player.Character.Parent == Workspace then
+                    Ingest(player.Character)
+                end
+            end
+        end
+    end
 
     -- 2. Pastas estruturadas de NPCs / Inimigos (varredura plana de 1 nível para evitar N^2 partes)
     for _, folderName in ipairs(self.SearchFolders) do

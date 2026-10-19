@@ -64,6 +64,39 @@ Assert(torsoLabel == "Torso", "Rótulo anatômico 'Torso' atribuído corretament
 -- Limpeza da instância de teste
 dummyModel:Destroy()
 
+-- Validação de Alvos Sintéticos (Dummies) vs Personagens de Jogadores Reais
+local testDummy = Instance.new("Model")
+testDummy.Name = "TestDummyTarget"
+local dHead = Instance.new("Part")
+dHead.Name = "Head"
+dHead.Position = Vector3.new(0, 10, 25)
+dHead.Parent = testDummy
+local dHum = Instance.new("Humanoid")
+dHum.Health = 100
+dHum.Parent = testDummy
+testDummy.Parent = game:GetService("Workspace")
+
+Assert(detector:IsValidTarget(testDummy) == true, "Dummies e NPCs sintéticos autorizados são aceitos como alvos")
+
+-- Teste de resolução de membros R6 com espaço no nome ("Right Arm", "Left Leg")
+local r6Arm = Instance.new("Part")
+r6Arm.Name = "Right Arm"
+r6Arm.Position = Vector3.new(2, 8, 25)
+r6Arm.Parent = testDummy
+local resolvedArm, _, armLabel = detector:ResolvePivotPosition(testDummy, "Arms")
+Assert(resolvedArm ~= nil and armLabel == "Arms", "Resolução de membros anatômicos R6 com espaço ('Right Arm')")
+
+-- Teste de rejeição de alvo morto (Humanoid.Health <= 0)
+dHum.Health = 0
+Assert(detector:IsValidTarget(testDummy) == false, "Alvo destruído/eliminado (Humanoid.Health <= 0) é rejeitado imediatamente")
+testDummy:Destroy()
+
+-- Teste de configuração AllowPlayerTargets
+SimConfig.Set("AllowPlayerTargets", false)
+Assert(SimConfig.Get("AllowPlayerTargets") == false, "SimConfig: AllowPlayerTargets desativado")
+SimConfig.Set("AllowPlayerTargets", true)
+Assert(SimConfig.Get("AllowPlayerTargets") == true, "SimConfig: AllowPlayerTargets ativado para sessões de teste autorizadas")
+
 -- -------------------------------------------------------------------------
 -- [CRITÉRIO 2] CÁLCULOS VETORIAIS (DIREÇÃO, DISTÂNCIA E LEAD)
 -- -------------------------------------------------------------------------
@@ -130,6 +163,24 @@ Assert(discDeg > 10.0 and discDeg < 15.0, "Discrepância angular do Silent Aim p
 
 local outFovValid, _, outDisc = tracker:ComputeSilentAimVector(silentCam, outOfFovTarget, 30.0)
 Assert(outFovValid == false, "Alvo fora do cone de 30° FOV rejeitado pelo Silent Aim")
+
+-- Validação dos 4 Estágios do Diagnóstico de Silent Aim
+-- Estágio 1: Módulo desativado
+SimConfig.Set("SilentAimEnabled", false)
+Assert(SimConfig.Get("SilentAimEnabled") == false, "Silent Aim [Estágio 1]: Módulo desativado verificado")
+
+-- Estágio 2: Módulo ativado
+SimConfig.Set("SilentAimEnabled", true)
+Assert(SimConfig.Get("SilentAimEnabled") == true, "Silent Aim [Estágio 1]: Módulo ativado verificado")
+
+-- Estágio 3: Alvo dentro vs fora do cone angular
+Assert(inFovValid == true and discDeg < 30.0, "Silent Aim [Estágio 3]: Alvo dentro do cone de FOV selecionado")
+Assert(outFovValid == false and outDisc > 30.0, "Silent Aim [Estágio 3]: Alvo fora do cone de FOV rejeitado com cálculo de desvio")
+
+-- Estágio 4: Cálculo de impacto (ACERTO no alvo)
+local shotCalc = tracker:SimulateShot(silentCam, inFovTarget, 30.0, 100.0, false, nil)
+Assert(shotCalc.Fired == true and shotCalc.HitRegistered == true, "Silent Aim [Estágio 4]: Impacto calculado com sucesso (ACERTO)")
+Assert(shotCalc.DiscrepancyAngleDeg < 30.0, "Silent Aim [Estágio 4]: Desvio angular desacoplado calculado com precisão")
 
 -- -------------------------------------------------------------------------
 -- [CRITÉRIO 6] PROBABILIDADE DE ACERTO CONFIGURADA (HIT CHANCE)

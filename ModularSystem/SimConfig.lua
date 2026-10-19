@@ -60,6 +60,7 @@ export type ProfileData = {
     -- Diagnosticos e Seguranca
     WatchdogEnabled: boolean,   -- Verificacao continua de integridade em segundo plano
     DebugLogging: boolean,      -- Exibir logs no console do Studio
+    AllowPlayerTargets: boolean,-- Considerar personagens de jogadores em ambientes autorizados
 }
 
 local PROFILES: { [string]: ProfileData } = {
@@ -102,6 +103,7 @@ local PROFILES: { [string]: ProfileData } = {
         SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
+        AllowPlayerTargets = true,
     },
     ["Leve"] = {
         SimulationActive = true,
@@ -142,6 +144,7 @@ local PROFILES: { [string]: ProfileData } = {
         SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
+        AllowPlayerTargets = true,
     },
     ["Medio"] = {
         SimulationActive = true,
@@ -182,6 +185,7 @@ local PROFILES: { [string]: ProfileData } = {
         SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
+        AllowPlayerTargets = true,
     },
     ["Agressivo"] = {
         SimulationActive = true,
@@ -222,6 +226,7 @@ local PROFILES: { [string]: ProfileData } = {
         SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = true,
+        AllowPlayerTargets = true,
     },
     ["Custom"] = {
         SimulationActive = true,
@@ -262,6 +267,7 @@ local PROFILES: { [string]: ProfileData } = {
         SilentAimTracer = true,
         WatchdogEnabled = true,
         DebugLogging = false,
+        AllowPlayerTargets = true,
     }
 }
 
@@ -295,6 +301,7 @@ local DEFAULT_OVERRIDES: any = {
     PanelEnabled = true,
     SidebarEnabled = true,
     PersistenceEnabled = true,
+    AllowPlayerTargets = true,
     ConfigVersion = CONFIG_VERSION,
 }
 for k, v in pairs(DEFAULT_OVERRIDES) do DEFAULT_PROFILE[k] = v end
@@ -324,6 +331,7 @@ local SCHEMA: { [string]: any } = {
     SilentAimEnabled = { t = "boolean" }, SilentAimFOV = { t = "number", min = 5, max = 90 },
     SilentAimHitChance = { t = "number", min = 0, max = 100 }, SilentAimTracer = { t = "boolean" },
     WatchdogEnabled = { t = "boolean" }, DebugLogging = { t = "boolean" },
+    AllowPlayerTargets = { t = "boolean" },
     FovRadiusPx = { t = "number", min = 20, max = 600 }, ShowSyntheticTargets = { t = "boolean" },
     ShowDebugMarkers = { t = "boolean" }, LineOfSightEnabled = { t = "boolean" },
     TelemetryIndicators = { t = "boolean" }, HistoryEnabled = { t = "boolean" },

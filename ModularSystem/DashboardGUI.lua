@@ -42,6 +42,7 @@ DashboardGUI.OnResetRequested = nil :: (() -> ())?
 DashboardGUI.OnSaveRequested = nil :: (() -> ())?
 DashboardGUI.OnRunLosScenario = nil :: ((string) -> ())?
 DashboardGUI.OnClearLosHistory = nil :: (() -> ())?
+DashboardGUI.OnSimulateSilentAimShot = nil :: (() -> ())?
 
 -- Instâncias Internas
 local ScreenGuiInstance: ScreenGui? = nil
@@ -786,6 +787,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- =========================================================================
     local pageCamera = pages["Camera"]
     CreateToggleField(pageCamera, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"))
+    CreateToggleField(pageCamera, "Considerar Jogadores como Alvos (Ambiente Autorizado)", "AllowPlayerTargets", SimConfig.Get("AllowPlayerTargets"))
     CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
     CreateSliderField(pageCamera, "Campo de Visão Útil (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
     CreateSliderField(pageCamera, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
@@ -842,6 +844,24 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     sLbl2.Text = "Último Disparo: NENHUM"
     sLbl2.Parent = silentCard
     TelemetryLabels["LastShotStatus"] = sLbl2
+
+    -- Botão de Teste Determinístico de Disparo Simulado
+    local testShotBtn = Instance.new("TextButton")
+    testShotBtn.Size = UDim2.new(1, 0, 0, 32)
+    testShotBtn.BackgroundColor3 = THEME.ACCENT_RED
+    testShotBtn.TextColor3 = THEME.TEXT_MAIN
+    testShotBtn.Font = Enum.Font.GothamBold
+    testShotBtn.TextSize = 11
+    testShotBtn.Text = "🎯 DISPARAR SIMULAÇÃO SILENT AIM (TESTE MANUAL)"
+    testShotBtn.Parent = pageCamera
+    AddCorner(testShotBtn, 6)
+    AddStroke(testShotBtn, THEME.BORDER_LIGHT, 1)
+
+    testShotBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnSimulateSilentAimShot then
+            DashboardGUI.OnSimulateSilentAimShot()
+        end
+    end)
 
     -- =========================================================================
     -- [ABA 3] SIMULAÇÃO & COMPORTAMENTO

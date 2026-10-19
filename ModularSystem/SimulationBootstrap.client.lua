@@ -68,17 +68,149 @@ local Detector = InstanceDetector.new(0.12) -- 8.3Hz de varredura espacial desac
 local Tracker = VectorTracker.new(filterInstances)
 local Renderer = VisualOverlayRenderer.new()
 
--- Tratamento Robusto de Respawn do Personagem
+-- Tratamento Robusto de Respawn do Personagem e Ferramentas (Armas)
+local triggerShotRequested = false
+local triggerSource = "Nenhum"
+local lastSilentAimLogTime = 0
+
+local function HookCharacterTools(char: Instance?)
+    if not char then return end
+    local function HookTool(child: Instance)
+        if child:IsA("Tool") then
+            child.Activated:Connect(function()
+                triggerShotRequested = true
+                triggerSource = "Tool.Activated (" .. child.Name .. ")"
+            end)
+        end
+    end
+    for _, child in ipairs(char:GetChildren()) do
+        HookTool(child)
+    end
+    char.ChildAdded:Connect(HookTool)
+end
+
 if LocalPlayer then
+    if LocalPlayer.Character then
+        HookCharacterTools(LocalPlayer.Character)
+    end
     LocalPlayer.CharacterAdded:Connect(function(char)
         table.clear(filterInstances)
         table.insert(filterInstances, char)
         Tracker:SetFilterInstances(filterInstances)
+        HookCharacterTools(char)
         DashboardGUI.AddDiagnosticLog("PLAYER", "Personagem recarregado no pipeline de filtros.", "INFO")
     end)
 end
 
+-- =========================================================================
+-- EXECUÇÃO DIAGNÓSTICA DE SILENT AIM (4 ESTÁGIOS ESTRITAMENTE AUDITADOS)
+-- =========================================================================
+local function ExecuteSilentAimShot(source: string): (boolean, string)
+    -- ESTÁGIO 1: Verificação de Inicialização do Módulo
+    local silentAimEnabled = SimConfig.Get("SilentAimEnabled") == true
+    if not silentAimEnabled then
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Módulo não iniciado / desativado no painel.", "WARN")
+        print(string.format("[SILENT AIM] [ESTÁGIO 1: MÓDULO] Disparo recebido via %s, porém o módulo está DESATIVADO no painel (SilentAimEnabled = false).", source))
+        return false, "MODULE_DISABLED"
+    end
+
+    -- ESTÁGIO 2: Confirmação de Recepção do Disparo
+    print(string.format("[SILENT AIM] [ESTÁGIO 2: DISPARO] Disparo recebido com sucesso via %s.", source))
+
+    local camera = Workspace.CurrentCamera
+    if not camera then
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", "Câmera ausente.", "WARN")
+        print("[SILENT AIM] [ESTÁGIO 3: ALVO] Falha: Câmera não encontrada no Workspace.")
+        return false, "NO_CAMERA"
+    end
+
+    local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
+    local silentAimFov = tonumber(SimConfig.Get("SilentAimFOV")) or 35.0
+    local silentAimHitChance = tonumber(SimConfig.Get("SilentAimHitChance")) or 100.0
+    local silentAimTracer = SimConfig.Get("SilentAimTracer") ~= false
+    local preferredBone = tostring(SimConfig.Get("TargetRegion") or "Head")
+    local teamCheck = SimConfig.Get("TeamCheck") == true
+    local visibleOnly = SimConfig.Get("VisibleOnly") == true
+    local targetPriority = tostring(SimConfig.Get("TargetPriority") or "Crosshair")
+    local targetStickiness = tonumber(SimConfig.Get("TargetStickiness")) or 0.25
+    local enableLead = SimConfig.Get("EnableLead") == true
+    local projSpeed = tonumber(SimConfig.Get("ProjectileSpeed")) or 900.0
+
+    -- ESTÁGIO 3: Seleção e Validação do Candidato
+    local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
+        camera.CFrame.Position,
+        camera.CFrame.LookVector,
+        maxRadius,
+        silentAimFov * 2,
+        preferredBone,
+        teamCheck,
+        targetPriority,
+        targetStickiness
+    )
+
+    if not bestTarget or not targetPos then
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado (Nenhum candidato em %d studs).", math.floor(maxRadius)), "WARN")
+        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: Nenhum candidato válido encontrado no raio de %d studs.", math.floor(maxRadius)))
+        return false, "NO_TARGET_IN_RADIUS"
+    end
+
+    -- Verificação de Oclusão (Linha de Visada)
+    local los = Tracker:EvaluateLineOfSight(camera.CFrame.Position, targetPos, bestTarget)
+    local isObstructed = (los.Status == "BLOCKED")
+    if visibleOnly and isObstructed then
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado: '%s' ocluído por parede.", bestTarget.Name), "WARN")
+        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: '%s' bloqueado por geometria (VisibleOnly ativo).", bestTarget.Name))
+        return false, "TARGET_OCCLUDED"
+    end
+
+    -- Predição Balística (Lead)
+    local aimPosition = targetPos
+    if enableLead then
+        local estimatedVel = Tracker:EstimateVelocity(bestTarget, targetPos)
+        aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
+    end
+
+    -- Validação do Cone Angular de Silent Aim
+    local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
+        camera.CFrame,
+        aimPosition,
+        silentAimFov
+    )
+
+    if not inFov then
+        DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Alvo não selecionado: '%s' fora do cone (%.1f° > %.1f°).", bestTarget.Name, discDeg, silentAimFov), "WARN")
+        print(string.format("[SILENT AIM] [ESTÁGIO 3: ALVO] Alvo não selecionado: '%s' fora do cone angular de redirecionamento (desvio %.1f° > FOV %.1f°).", bestTarget.Name, discDeg, silentAimFov))
+        return false, "TARGET_OUTSIDE_FOV"
+    end
+
+    -- ESTÁGIO 4: Cálculo do Ponto de Impacto e Simulação do Disparo
+    local shotResult = Tracker:SimulateShot(
+        camera.CFrame,
+        aimPosition,
+        silentAimFov,
+        silentAimHitChance,
+        isObstructed,
+        bestTarget
+    )
+    Tracker.LastShotResult = shotResult
+
+    if silentAimTracer and shotResult.Fired then
+        local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
+        Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.25)
+    end
+
+    local resTag = shotResult.HitRegistered and "ACERTO" or "DISPERSÃO"
+    DashboardGUI.AddDiagnosticLog("SILENT_AIM", string.format("Impacto calculado: %s em '%s' (Desvio: %.1f°).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg), shotResult.HitRegistered and "OK" or "WARN")
+    print(string.format("[SILENT AIM] [ESTÁGIO 4: IMPACTO] Impacto calculado: %s em '%s' (Desvio angular: %.1f°, Destino: %s).", resTag, bestTarget.Name, shotResult.DiscrepancyAngleDeg, tostring(shotResult.TargetPosition)))
+
+    return true, resTag
+end
+
 -- Conexão de Ações do DashboardGUI
+DashboardGUI.OnSimulateSilentAimShot = function()
+    ExecuteSilentAimShot("Dashboard GUI (Botão de Teste)")
+end
+
 DashboardGUI.OnRunLosScenario = function(id: string)
     local outcome, res = ScenarioRunner.Run(Tracker, id)
     if outcome and res then
@@ -119,6 +251,8 @@ UserInputService.InputBegan:Connect(function(input, gpe)
         isToggleAimActive = not isToggleAimActive
     elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
         isLeftMouseDown = true
+        triggerShotRequested = true
+        triggerSource = "MouseButton1 (InputBegan)"
     end
 end)
 
@@ -184,7 +318,10 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             shouldAim = (not holdToAim) or isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
         end
 
-        local isFiring = shouldAim or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        local isShooting = triggerShotRequested or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        local isDiscreteTrigger = triggerShotRequested
+        local currentTriggerSrc = triggerSource
+        triggerShotRequested = false
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
         -- FOV de seleção: raio em pixels (FovRadiusPx, o mesmo do círculo visual) convertido em
@@ -285,6 +422,35 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             end
 
             -- 5. Simulação de Silent Aim (Disparo Desacoplado da Câmera)
+            if isShooting then
+                local now = os.clock()
+                if (now - lastTracerTime) >= 0.10 then
+                    lastTracerTime = now
+                    local src = isDiscreteTrigger and currentTriggerSrc or "MouseButton1 contínuo"
+                    if isDiscreteTrigger or (now - lastSilentAimLogTime) >= 0.35 then
+                        lastSilentAimLogTime = now
+                        ExecuteSilentAimShot(src)
+                    elseif silentAimEnabled and isTargetValid then
+                        local inFov = Tracker:ComputeSilentAimVector(camera.CFrame, aimPosition, silentAimFov)
+                        if inFov then
+                            local shotResult = Tracker:SimulateShot(
+                                camera.CFrame,
+                                aimPosition,
+                                silentAimFov,
+                                silentAimHitChance,
+                                isObstructed,
+                                bestTarget
+                            )
+                            Tracker.LastShotResult = shotResult
+                            if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
+                                local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
+                                Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
+                            end
+                        end
+                    end
+                end
+            end
+
             if silentAimEnabled and isTargetValid then
                 local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
                     camera.CFrame,
@@ -297,25 +463,6 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                     silentAimActive = true
                     if currentMode == "IDLE" then
                         currentMode = "SILENT_AIM"
-                    end
-
-                    -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s ao mirar ou atirar)
-                    local now = os.clock()
-                    if isFiring and (now - lastTracerTime) >= 0.10 then
-                        lastTracerTime = now
-                        local shotResult = Tracker:SimulateShot(
-                            camera.CFrame,
-                            aimPosition,
-                            silentAimFov,
-                            silentAimHitChance,
-                            isObstructed,
-                            bestTarget
-                        )
-                        Tracker.LastShotResult = shotResult
-                        if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
-                            local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
-                        end
                     end
                 end
             end
@@ -351,6 +498,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 Tracker:ResetTracking()
             end
         else
+            if isShooting and isDiscreteTrigger then
+                ExecuteSilentAimShot(currentTriggerSrc)
+            end
             Tracker:ResetTracking()
             Renderer:ClearAll()
         end
