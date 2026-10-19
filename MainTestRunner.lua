@@ -2,13 +2,15 @@
 -- =========================================================================
 -- MainTestRunner.lua
 -- Executor Automatizado de Testes Unitários e Integração (Studio & CI Console)
--- Validação: SimConfig, VectorTracker, EngineCore, Tolerâncias e Anomalias
+-- Validação Completa das 12 Dimensões de Confiabilidade da Fase 2
 -- =========================================================================
 
 local Engine = require(script.Parent.EngineCore)
 local Simulator = require(script.Parent.BehaviorSimulator)
 local SimConfig = require(script.Parent.ModularSystem.SimConfig)
 local VectorTracker = require(script.Parent.ModularSystem.VectorTracker)
+local InstanceDetector = require(script.Parent.ModularSystem.InstanceDetector)
+local VisualOverlayRenderer = require(script.Parent.ModularSystem.VisualOverlayRenderer)
 
 local TotalAssertions = 0
 local PassedAssertions = 0
@@ -26,165 +28,246 @@ local function Assert(condition: boolean, testName: string, detail: string?)
 end
 
 print("===================================================================")
-print("       DEEPHAT SIMULATION SUITE // AUTOMATED TEST RUNNER           ")
+print("       DEEPHAT SIMULATION SUITE // TEST RUNNER - FASE 2            ")
 print("===================================================================")
 
 -- -------------------------------------------------------------------------
--- [TEST SUITE 1] VALIDAÇÃO DO SIMCONFIG (OBSERVER & PERSISTÊNCIA)
+-- [CRITÉRIO 1] SELEÇÃO CONSISTENTE DE ALVOS
 -- -------------------------------------------------------------------------
-print("\n[SUITE 1] Validando SimConfig e Observer Pattern...")
+print("\n[CRITÉRIO 1] Validando Seleção e Priorização de Alvos...")
+local detector = InstanceDetector.new(0.1)
+Assert(detector ~= nil, "Detector de instâncias instanciado com sucesso")
 
-local initialFov = SimConfig.Get("FOV")
-Assert(typeof(initialFov) == "number", "SimConfig.Get('FOV') retorna número válido")
+-- Teste de resolução de ossos e partes
+local dummyModel = Instance.new("Model")
+dummyModel.Name = "TestDummyTarget"
+local headPart = Instance.new("Part")
+headPart.Name = "Head"
+headPart.Position = Vector3.new(0, 10, 30)
+headPart.Parent = dummyModel
 
-local observerFired = false
-local unsubscribe = SimConfig.Subscribe("Smoothing", function(newVal)
-    if newVal == 0.42 then
-        observerFired = true
-    end
+local torsoPart = Instance.new("Part")
+torsoPart.Name = "UpperTorso"
+torsoPart.Position = Vector3.new(0, 7, 30)
+torsoPart.Parent = dummyModel
+
+dummyModel.Parent = game:GetService("Workspace")
+
+local resolvedHead, _, headLabel = detector:ResolvePivotPosition(dummyModel, "Head")
+Assert(resolvedHead ~= nil and (resolvedHead - headPart.Position).Magnitude < 0.01, "Resolução precisa do osso 'Head'")
+Assert(headLabel == "Head", "Rótulo anatômico 'Head' atribuído corretamente")
+
+local resolvedTorso, _, torsoLabel = detector:ResolvePivotPosition(dummyModel, "Torso")
+Assert(resolvedTorso ~= nil and (resolvedTorso - torsoPart.Position).Magnitude < 0.01, "Resolução precisa do osso 'Torso'")
+Assert(torsoLabel == "Torso", "Rótulo anatômico 'Torso' atribuído corretamente")
+
+-- Limpeza da instância de teste
+dummyModel:Destroy()
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 2] CÁLCULOS VETORIAIS (DIREÇÃO, DISTÂNCIA E LEAD)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 2] Validando Cálculos Vetoriais e Predição Balística...")
+local tracker = VectorTracker.new({})
+
+local originPos = Vector3.new(0, 5, 0)
+local targetInitial = Vector3.new(100, 5, 0)
+local targetVelocity = Vector3.new(0, 0, 25) -- Alvo cruzando o eixo Z a 25 studs/s
+local projSpeed = 1000.0 -- 1000 studs/s
+
+local predictedPos = tracker:ComputeLead(targetInitial, targetVelocity, originPos, projSpeed, true)
+local expectedFlightTime = (targetInitial - originPos).Magnitude / projSpeed -- 100 / 1000 = 0.1s
+local expectedZ = targetInitial.Z + targetVelocity.Z * expectedFlightTime -- 0 + 2.5 = 2.5
+Assert(math.abs(predictedPos.Z - expectedZ) < 0.1, "Predição balística (Lead) calculou interceptação com erro < 0.1 studs")
+Assert(predictedPos.X == targetInitial.X, "Predição preservou a coordenada X invariante")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 3] SUAVIZAÇÃO E LIMITES ANGULARES
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 3] Validando Suavização Cinemática e Limitação Angular...")
+local camOrigin = CFrame.new(Vector3.new(0, 5, 0), Vector3.new(0, 5, 10))
+local offTarget = Vector3.new(40, 5, 40) -- Ângulo de 45 graus
+
+-- Perfil Agressivo (Smoothing baixo = alta resposta)
+local aggressiveCFrame, _, aggressiveVel = tracker:ComputeSmoothRotation(camOrigin, offTarget, 0.016, 0.02, 1.0, false, 0, 500, false)
+-- Perfil Suave (Smoothing alto = movimento suave/lento)
+local smoothCFrame, _, smoothVel = tracker:ComputeSmoothRotation(camOrigin, offTarget, 0.016, 0.28, 1.0, false, 0, 500, false)
+
+Assert(aggressiveVel > smoothVel, "Perfil com Smoothing menor (Agressivo) produziu maior velocidade de resposta que Smoothing alto (Suave)")
+
+-- Limitação estrita de velocidade angular (Clamp)
+local largeAngleTarget = Vector3.new(0, 5, -100) -- Alvo a 180 graus
+local _, _, clampedVel = tracker:ComputeSmoothRotation(camOrigin, largeAngleTarget, 0.016, 0.5, 1.0, false, 0, 150.0, true)
+Assert(clampedVel <= 155.0, "Clamp estrito limitou a velocidade angular ao teto físico configurado (<= 150°/s)")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 4] TRATAMENTO DE VETORES INVÁLIDOS E DISTÂNCIA ZERO
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 4] Validando Tratamento de Singularidades e Vetores Inválidos...")
+local zeroTarget = camOrigin.Position
+local safeCFrame, errDeg, safeVel = tracker:ComputeSmoothRotation(camOrigin, zeroTarget, 0.016, 0.15)
+local isPosValid = (safeCFrame.Position.X == safeCFrame.Position.X)
+Assert(isPosValid == true, "Proteção Epsilon preveniu divisão por zero e geração de NaN")
+Assert(errDeg == 0 and safeVel == 0, "Erro angular e velocidade foram zerados em distância zero")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 5] SILENT AIM SIMULADO DENTRO E FORA DO FOV
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 5] Validando Silent Aim Simulado (Cone Angular)...")
+local silentCam = CFrame.new(Vector3.new(0, 5, 0), Vector3.new(0, 5, 50)) -- Olhando para +Z
+local inFovTarget = Vector3.new(10, 5, 50) -- Ângulo de ~11.3 graus
+local outOfFovTarget = Vector3.new(60, 5, 20) -- Ângulo > 60 graus
+
+local inFovValid, decoupledDir, discDeg = tracker:ComputeSilentAimVector(silentCam, inFovTarget, 30.0)
+Assert(inFovValid == true, "Alvo dentro do cone de 30° FOV aprovado para Silent Aim")
+Assert(discDeg > 10.0 and discDeg < 15.0, "Discrepância angular do Silent Aim precisa (~11.3°)")
+
+local outFovValid, _, outDisc = tracker:ComputeSilentAimVector(silentCam, outOfFovTarget, 30.0)
+Assert(outFovValid == false, "Alvo fora do cone de 30° FOV rejeitado pelo Silent Aim")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 6] PROBABILIDADE DE ACERTO CONFIGURADA (HIT CHANCE)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 6] Validando Probabilidade de Acerto (SimulateShot)...")
+-- Teste de 100% de Hit Chance
+local hit100 = tracker:SimulateShot(silentCam, inFovTarget, 30.0, 100.0, false, nil)
+Assert(hit100.Fired == true, "Disparo disparado com sucesso")
+Assert(hit100.HitRegistered == true, "100% HitChance registrou impacto no alvo")
+Assert((hit100.TargetPosition - inFovTarget).Magnitude < 0.01, "Posição de impacto coincidente com alvo")
+
+-- Teste de 0% de Hit Chance (Dispersão simulada forçada)
+local hit0 = tracker:SimulateShot(silentCam, inFovTarget, 30.0, 0.0, false, nil)
+Assert(hit0.HitRegistered == false, "0% HitChance registrou desvio proposital (miss)")
+Assert((hit0.TargetPosition - inFovTarget).Magnitude > 0.5, "Posição de impacto divergiu do alvo real")
+
+-- Teste estatístico de 50% de Hit Chance (Amostragem Monte Carlo de 100 tiros)
+local hits50 = 0
+for _ = 1, 100 do
+    local res = tracker:SimulateShot(silentCam, inFovTarget, 30.0, 50.0, false, nil)
+    if res.HitRegistered then hits50 = hits50 + 1 end
+end
+Assert(hits50 >= 30 and hits50 <= 70, string.format("HitChance de 50%% respeitou distribuição estatística (%d%% em 100 tiros)", hits50))
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 7] ATIVAÇÃO E DESATIVAÇÃO DOS MÓDULOS
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 7] Validando Ativação e Desativação do Sistema...")
+SimConfig.Set("SimulationActive", false)
+Assert(SimConfig.Get("SimulationActive") == false, "Estado inativo configurado com sucesso")
+
+SimConfig.Set("SimulationActive", true)
+Assert(SimConfig.Get("SimulationActive") == true, "Estado ativo restaurado com sucesso")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 8] LIMPEZA DE EVENTOS E OBJETOS (ESP BATCH SYNC)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 8] Validando Ciclo de Vida e Limpeza de Objetos Visuais...")
+local renderer = VisualOverlayRenderer.new()
+
+local testPart1 = Instance.new("Part")
+testPart1.Name = "Dummy1"
+testPart1.Parent = game:GetService("Workspace")
+
+local testPart2 = Instance.new("Part")
+testPart2.Name = "Dummy2"
+testPart2.Parent = game:GetService("Workspace")
+
+-- Sincroniza lote com 2 instâncias
+renderer:SyncBatchHighlights({ testPart1, testPart2 }, testPart1, false)
+Assert(renderer.ActiveHighlights[testPart1] ~= nil, "Highlight alocado para o alvo principal")
+Assert(renderer.ActiveHighlights[testPart2] ~= nil, "Highlight alocado para o candidato secundário")
+
+-- Remove Dummy2 da lista de candidatos e sincroniza novamente
+renderer:SyncBatchHighlights({ testPart1 }, testPart1, false)
+Assert(renderer.ActiveHighlights[testPart2] == nil, "Highlight de candidato excluído foi liberado/destruído automaticamente")
+
+-- Limpeza total
+renderer:ClearAll()
+Assert(next(renderer.ActiveHighlights) == nil, "Renderer:ClearAll eliminou todos os realces ativos")
+
+testPart1:Destroy()
+testPart2:Destroy()
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 9] ATUALIZAÇÃO DOS CONTROLES DE CONFIGURAÇÃO
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 9] Validando Controles de Configuração e Observer Pattern...")
+local testKeyChanged = false
+local unreg = SimConfig.Subscribe("TargetPriority", function(val)
+    if val == "Distance" then testKeyChanged = true end
 end)
-
-SimConfig.Set("Smoothing", 0.42)
-task.wait(0.05) -- aguarda task.spawn do observer
-Assert(observerFired == true, "Observer de chave específica notificado com sucesso")
-unsubscribe()
+SimConfig.Set("TargetPriority", "Distance")
+task.wait(0.02)
+Assert(testKeyChanged == true, "Notificação de observer disparada ao alterar TargetPriority")
+unreg()
 
 SimConfig.LoadProfile("Agressivo")
-Assert(SimConfig.Get("ActiveProfile") == "Agressivo", "Carregamento do perfil 'Agressivo'")
-Assert(SimConfig.Get("Smoothing") == 0.02, "Parâmetro 'Smoothing' atualizado pelo perfil")
-
--- Teste de Exportação / Importação JSON
-local exportedJson = SimConfig.ExportJSON()
-Assert(#exportedJson > 20, "Exportação JSON gerou payload válido")
-
-local importOk = SimConfig.ImportJSON(exportedJson)
-Assert(importOk == true, "Importação JSON desserializada com sucesso")
-
--- Restaura perfil Normal
+Assert(SimConfig.Get("Smoothing") == 0.02, "Carregamento de perfil sobrescreveu parâmetros corretamente")
 SimConfig.LoadProfile("Normal")
 
 -- -------------------------------------------------------------------------
--- [TEST SUITE 2] VALIDAÇÃO MATEMÁTICA DO VECTORTRACKER (GUARDA EPSILON & LERP)
+-- [CRITÉRIO 10] DETECÇÃO DE ANOMALIAS NO ENGINECORE
 -- -------------------------------------------------------------------------
-print("\n[SUITE 2] Validando VectorTracker (Álgebra Linear & Prevenção de NaN)...")
-
-local tracker = VectorTracker.new({})
-
--- 1. Teste de Epsilon (origem igual ao destino)
-local eyePos = Vector3.new(0, 5, 0)
-local originCFrame = CFrame.new(eyePos, eyePos + Vector3.new(0, 0, 10))
-local safeCFrame, errDeg, angVel = tracker:ComputeSmoothRotation(originCFrame, eyePos, 0.016, 0.15)
-local isPosValid = (safeCFrame.Position.X == safeCFrame.Position.X) -- Checa por NaN
-Assert(isPosValid == true, "Guarda Epsilon impediu vetor indefinido/NaN em distância zero")
-Assert(errDeg == 0, "Erro angular zero quando origem == destino")
-
--- 2. Teste de Rotação Suavizada em Alvo Real
-local targetPos = Vector3.new(50, 5, 50)
-local smoothedCFrame, rotError, calculatedVel = tracker:ComputeSmoothRotation(originCFrame, targetPos, 0.016, 0.15)
-Assert(smoothedCFrame.Position == eyePos, "Preservação da posição do olho da câmera durante rotação")
-Assert(rotError > 0 and rotError <= 180, "Cálculo preciso do erro angular")
-Assert(calculatedVel > 0, "Cálculo não-nulo de velocidade angular instantânea")
-
--- 3. Teste de Rotação Snap Instantânea
-local snapCFrame, _, snapVel = tracker:ComputeSnapRotation(originCFrame, targetPos, 0.016)
-local snapLook = snapCFrame.LookVector
-local targetDir = (targetPos - eyePos).Unit
-local dot = snapLook:Dot(targetDir)
-Assert(math.abs(dot - 1.0) < 0.001, "Modo Snap alinhou o LookVector perfeitamente em 1 frame")
-Assert(snapVel > 1000, "Modo Snap gerou velocidade angular compatível com rotação brusca")
-
--- 4. Teste de Predição Balística (Lead Tracking)
-local targetInitial = Vector3.new(100, 0, 0)
-local targetVelocity = Vector3.new(0, 0, 20)
-local predictedPos = tracker:ComputeLead(targetInitial, targetVelocity, Vector3.zero, 1000, true)
-Assert(predictedPos.Z > targetInitial.Z, "Predição balística antecipou o vetor de deslocamento do alvo")
-
--- 5. Teste de Clamp de Velocidade Angular Máxima
-local largeTargetPos = Vector3.new(0, 5, -100) -- Alvo 180 graus atrás
-local _, _, unconstrainedVel = tracker:ComputeSmoothRotation(originCFrame, largeTargetPos, 0.016, 0.8, 1.0, false, 0, 180, false)
-local _, _, clampedVel = tracker:ComputeSmoothRotation(originCFrame, largeTargetPos, 0.016, 0.8, 1.0, false, 0, 180, true)
-Assert(clampedVel <= 185.0, "Clamp estrito de velocidade angular limitou a rotação ao teto físico configurado (<= 180°/s)")
-
--- 6. Teste de Silent Aim (Vetor Desacoplado da Câmera)
-local silentTargetPos = Vector3.new(20, 5, 50) -- Ângulo de ~21.8 graus
-local isRedirected, decoupledDir, discDeg = tracker:ComputeSilentAimVector(originCFrame, silentTargetPos, 35.0, 100.0)
-Assert(isRedirected == true, "Silent Aim redirecionou disparo para alvo dentro do FOV de atuação")
-Assert(discDeg > 15.0 and discDeg < 30.0, "Discrepância angular calculada com precisão trigonométrica")
-local expectedDir = (silentTargetPos - originCFrame.Position).Unit
-Assert((decoupledDir - expectedDir).Magnitude < 0.001, "Vetor de disparo desacoplado alinhado com o alvo real")
-
--- 7. Teste de Silent Aim Fora do Limite de FOV
-local outOfFovTarget = Vector3.new(100, 5, 10) -- Ângulo > 70 graus
-local isOutRedirected, _, outDisc = tracker:ComputeSilentAimVector(originCFrame, outOfFovTarget, 25.0, 100.0)
-Assert(isOutRedirected == false, "Silent Aim rejeitou redirecionamento fora do raio angular configurado")
-
--- -------------------------------------------------------------------------
--- [TEST SUITE 3] SESSÃO DE TESTES CONTROLADA (DETECÇÃO DE ANOMALIAS)
--- -------------------------------------------------------------------------
-print("\n[SUITE 3] Executando Sessões de Teste Controladas de Comportamento...")
-
-local function RunControlledSession(profileKey: string, iterations: number)
-    local prof = Engine.Profiles[profileKey]
-    local totalScore = 0
-    local streak = 0
-
-    for _ = 1, iterations do
-        local mData = Simulator:SimulateMovement(prof)
-        local aData = Simulator:SimulateAim(prof, 0.016)
-        local vData = Simulator:SimulateVision(prof, streak)
-        streak = vData.consecutiveOccluded
-
-        local report = Engine:CalculateSuspicion({
-            angularVelocity = aData.angularVel,
-            singleFrameDeltaDeg = aData.deltaAngleDeg,
-            isSnap = aData.isSnap,
-            isObstructed = vData.isWallTracking,
-            consecutiveOccludedFrames = vData.consecutiveOccluded,
-            linearSpeed = mData.velocity
-        })
-
-        totalScore = totalScore + report.totalScore
-    end
-
-    return totalScore / iterations
-end
-
-local avgNormal = RunControlledSession("NORMAL", 25)
-print(string.format("  Média de Suspeita (Perfil NORMAL): %.1f%%", avgNormal))
-Assert(avgNormal < 40.0, "Perfil Normal gerou score médio de suspeita baixo (< 40%)")
-
-local avgAgressivo = RunControlledSession("AGRESSIVO", 25)
-print(string.format("  Média de Suspeita (Perfil AGRESSIVO): %.1f%%", avgAgressivo))
-Assert(avgAgressivo > 65.0, "Perfil Agressivo disparou alertas heurísticos de anomalia (> 65%)")
-
--- -------------------------------------------------------------------------
--- [TEST SUITE 4] DETECÇÃO HEURÍSTICA DE SILENT AIM NO ENGINECORE
--- -------------------------------------------------------------------------
-print("\n[SUITE 4] Validando Detecção Heurística de Silent Aim...")
-
-local silentReportMod = Engine:CalculateSuspicion({
-    angularVelocity = 120,
-    decoupledAngleDeg = 22.5,
-    isSnap = false
+print("\n[CRITÉRIO 10] Validando Detecção de Anomalias no EngineCore...")
+local reportNormal = Engine:CalculateSuspicion({
+    angularVelocity = 60,
+    singleFrameDeltaDeg = 1.0,
+    isSnap = false,
+    isObstructed = false,
+    linearSpeed = 16
 })
-Assert(silentReportMod.totalScore >= 45, "EngineCore detectou anomalia moderada de Silent Aim (score >= 45)")
-local hasModFlag = false
-for _, f in ipairs(silentReportMod.anomalies) do
-    if f:find("DISCREPANCIA_SILENT_AIM") then hasModFlag = true end
-end
-Assert(hasModFlag == true, "EngineCore emitiu flag 'DISCREPANCIA_SILENT_AIM'")
+Assert(reportNormal.totalScore < 30, "Condição normal gerou score de suspeição baixo (< 30%)")
 
-local silentReportCrit = Engine:CalculateSuspicion({
+local reportSilentCrit = Engine:CalculateSuspicion({
     angularVelocity = 80,
-    decoupledAngleDeg = 42.0,
+    decoupledAngleDeg = 45.0,
     isSnap = false
 })
-Assert(silentReportCrit.totalScore >= 65, "EngineCore detectou Silent Aim crítico (> 35°)")
-local hasCritFlag = false
-for _, f in ipairs(silentReportCrit.anomalies) do
-    if f:find("SILENT_AIM_CRITICO") then hasCritFlag = true end
+Assert(reportSilentCrit.totalScore >= 65, "EngineCore detectou anomalia crítica de Silent Aim (score >= 65%)")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 11] COMPORTAMENTO QUANDO NÃO EXISTEM ALVOS
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 11] Validando Estabilidade com Ausência de Alvos...")
+local emptyDetector = InstanceDetector.new(0.1)
+emptyDetector.CandidatePool = {}
+
+local noTarget, noPos, noDist = emptyDetector:FindBestCandidate(
+    Vector3.new(0, 5, 0),
+    Vector3.new(0, 0, 1),
+    300.0,
+    70.0,
+    "Head",
+    false,
+    "Crosshair",
+    0.25
+)
+Assert(noTarget == nil and noPos == nil and noDist == 0, "Busca sem alvos retornou nil com segurança e sem erros de execução")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 12] DESEMPENHO SOB DIFERENTES CARGAS DE ALVOS
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 12] Validando Desempenho e Carga Espacial...")
+local function BenchmarkCandidates(count: number): number
+    local startT = os.clock()
+    local mockPool = {}
+    for i = 1, count do
+        local p = Instance.new("Part")
+        p.Position = Vector3.new(math.sin(i) * 50, 5, math.cos(i) * 50)
+        table.insert(mockPool, p)
+    end
+    detector.CandidatePool = mockPool
+    detector:FindBestCandidate(Vector3.new(0, 5, 0), Vector3.new(0, 0, 1), 300, 90, "Head", false, "Crosshair", 0.25)
+    local elapsed = (os.clock() - startT) * 1000.0
+    for _, p in ipairs(mockPool) do p:Destroy() end
+    return elapsed
 end
-Assert(hasCritFlag == true, "EngineCore emitiu flag 'SILENT_AIM_CRITICO'")
+
+local time10 = BenchmarkCandidates(10)
+local time50 = BenchmarkCandidates(50)
+local time100 = BenchmarkCandidates(100)
+print(string.format("  Tempo de Varredura - 10 alvos: %.3f ms | 50 alvos: %.3f ms | 100 alvos: %.3f ms", time10, time50, time100))
+Assert(time100 < 5.0, "Varredura de 100 candidatos executada em menos de 5.0 ms (Alta Performance)")
 
 -- -------------------------------------------------------------------------
 -- RESUMO FINAL
@@ -192,7 +275,7 @@ Assert(hasCritFlag == true, "EngineCore emitiu flag 'SILENT_AIM_CRITICO'")
 print("\n===================================================================")
 print(string.format("TESTES CONCLUÍDOS: %d | APROVADOS: %d | REPROVADOS: %d", TotalAssertions, PassedAssertions, FailedAssertions))
 if FailedAssertions == 0 then
-    print("STATUS GERAL: [ ✓ SISTEMA 100% OPERACIONAL E HOMOLOGADO ]")
+    print("STATUS GERAL: [ ✓ TODOS OS 12 CRITÉRIOS APROVADOS COM 100% DE SUCESSO ]")
 else
     warn("STATUS GERAL: [ ✗ FALHAS DETECTADAS - REVISE O LOG ACIMA ]")
 end

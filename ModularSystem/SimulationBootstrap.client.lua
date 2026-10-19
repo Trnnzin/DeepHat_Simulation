@@ -58,12 +58,14 @@ DashboardGUI.OnResetRequested = function()
     DashboardGUI.AddDiagnosticLog("PIPELINE", "Perfis e realces resetados.", "INFO")
 end
 
--- Gerenciamento de Input para Mira (RMB / MouseButton2)
+-- Gerenciamento de Input para Mira (RMB / MouseButton2) com Suporte a Modos
 local isRightMouseDown = false
+local isToggleAimActive = false
 
 UserInputService.InputBegan:Connect(function(input, gpe)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = true
+        isToggleAimActive = not isToggleAimActive
     end
 end)
 
@@ -71,6 +73,10 @@ UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = false
     end
+end)
+
+UserInputService.WindowFocusReleased:Connect(function()
+    isRightMouseDown = false
 end)
 
 -- Pipeline de Renderização de Alta Frequência (RenderStepped)
@@ -100,9 +106,16 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             return
         end
 
-        local holdToAim = SimConfig.Get("HoldToAim") == true
-        local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        local shouldAim = (not holdToAim) or isRmbHeld
+        local aimMode = SimConfig.Get("AimMode") or "HoldRMB"
+        local shouldAim = false
+        if aimMode == "AlwaysOn" then
+            shouldAim = true
+        elseif aimMode == "Toggle" then
+            shouldAim = isToggleAimActive
+        else -- "HoldRMB"
+            local holdToAim = SimConfig.Get("HoldToAim") ~= false
+            shouldAim = (not holdToAim) or isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        end
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
         local fov = tonumber(SimConfig.Get("FOV")) or 70.0
@@ -149,10 +162,10 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         if bestTarget and targetPos then
             targetName = string.format("%s (%s - %d HP)", bestTarget.Name, targetLabel, math.floor(targetHealth or 100))
 
-            -- 2. Verificação de Oclusão Geométrica (Raycast)
-            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos)
+            -- 2. Verificação de Oclusão Geométrica (Ignorando o próprio alvo)
+            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos, bestTarget)
 
-            -- Se configurado para "Somente Visíveis" e houver barreira, descarta mira
+            -- Se configurado para "Somente Visíveis" e houver barreira real, descarta alvo
             local isTargetValid = true
             if visibleOnly and isObstructed then
                 isTargetValid = false
@@ -165,38 +178,49 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 aimPosition = Tracker:ComputeLead(targetPos, estimatedVel, camera.CFrame.Position, projSpeed, true)
             end
 
-            -- 4. Realce Visual (ESP Chams)
+            -- 4. Realce Visual Dinâmico em Lote (ESP Chams com limpeza automática)
             if enableESP then
-                Renderer:UpdateTargetHighlight(bestTarget, isObstructed, true)
+                Renderer:SyncBatchHighlights(Detector.CandidatePool, bestTarget, isObstructed)
             else
                 Renderer:ClearAll()
             end
 
-            -- 5. Simulação de Silent Aim (Vetor Desacoplado)
+            -- 5. Simulação de Silent Aim (Disparo Desacoplado da Câmera)
             if silentAimEnabled and isTargetValid then
-                local isSilentHit, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
+                local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
                     camera.CFrame,
                     aimPosition,
-                    silentAimFov,
-                    silentAimHitChance
+                    silentAimFov
                 )
-                if isSilentHit then
+                decoupledAngle = discDeg
+
+                if inFov then
                     silentAimActive = true
-                    decoupledAngle = discDeg
                     currentMode = "SILENT_AIM"
 
-                    -- Desenha Traçador de Disparo Simulado (Throttled em 15Hz para não sobrecarregar)
+                    -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s)
                     local now = os.clock()
-                    if silentAimTracer and shouldAim and (now - lastTracerTime) >= 0.065 then
+                    if shouldAim and (now - lastTracerTime) >= 0.10 then
                         lastTracerTime = now
-                        local muzzlePos = camera.CFrame.Position + camera.CFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
-                        Tracker:DrawTracerBeam(muzzlePos, aimPosition, Color3.fromRGB(255, 60, 75), 0.12)
+                        local shotResult = Tracker:SimulateShot(
+                            camera.CFrame,
+                            aimPosition,
+                            silentAimFov,
+                            silentAimHitChance,
+                            isObstructed,
+                            bestTarget
+                        )
+                        if silentAimTracer and shotResult.Fired then
+                            local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
+                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
+                        end
                     end
                 end
             end
 
-            -- 6. Interpolação Cinemática da Câmera (Aimbot Padrão - somente se Silent Aim não substituir o movimento)
-            if shouldAim and isTargetValid and not silentAimActive then
+            -- 6. Interpolação Cinemática da Câmera (Aimbot Convencional)
+            -- Executa somente quando Silent Aim estiver desativado para preservar os dois modos
+            if shouldAim and isTargetValid and not silentAimEnabled then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")

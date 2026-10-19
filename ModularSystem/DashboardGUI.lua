@@ -46,6 +46,7 @@ local MainFrameInstance: Frame? = nil
 local FovCircleInstance: Frame? = nil
 local WatchdogBadgeInstance: TextLabel? = nil
 local EventLogListInstance: ScrollingFrame? = nil
+local unsubscribeGlobal: (() -> ())? = nil
 
 -- Elementos de Telemetria Dinâmica
 local TelemetryLabels: { [string]: TextLabel } = {}
@@ -1162,8 +1163,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
         if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
     end)
 
-    -- Sincronização Observer
-    SimConfig.SubscribeAll(function(key, val)
+    -- Sincronização Observer Segura com Cleanup de Instância Anterior
+    if unsubscribeGlobal then
+        unsubscribeGlobal()
+        unsubscribeGlobal = nil
+    end
+
+    unsubscribeGlobal = SimConfig.SubscribeAll(function(key, val)
         if key == "ActiveProfile" then
             UpdateProfileUI(tostring(val))
         elseif key == "TargetRegion" then
@@ -1177,6 +1183,13 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
             end
         elseif syncInputs[key] and typeof(val) == "number" then
             syncInputs[key](val)
+        end
+    end)
+
+    screenGui.Destroying:Connect(function()
+        if unsubscribeGlobal then
+            unsubscribeGlobal()
+            unsubscribeGlobal = nil
         end
     end)
 

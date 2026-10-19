@@ -415,9 +415,18 @@ do
         local seen: { [Instance]: boolean } = {}
 
         local function Ingest(inst: Instance)
-            if self:IsValidTarget(inst, teamCheck) and not seen[inst] then
-                seen[inst] = true
-                table.insert(newPool, inst)
+            if not inst then return end
+            local targetEntity = inst
+            if inst:IsA("BasePart") and inst.Parent and inst.Parent:IsA("Model") and inst.Parent ~= Workspace then
+                local parentModel = inst.Parent :: Model
+                if parentModel:FindFirstChildOfClass("Humanoid") or parentModel.PrimaryPart then
+                    targetEntity = parentModel
+                end
+            end
+
+            if self:IsValidTarget(targetEntity, teamCheck) and not seen[targetEntity] then
+                seen[targetEntity] = true
+                table.insert(newPool, targetEntity)
             end
         end
 
@@ -429,7 +438,7 @@ do
             local container = Workspace:FindFirstChild(folderName)
             if container then
                 for _, child in ipairs(container:GetChildren()) do
-                    if child:IsA("Model") or child:IsA("BasePart") then Ingest(child) end
+                    Ingest(child)
                 end
             end
         end
@@ -438,7 +447,7 @@ do
             local okTagged, taggedList = pcall(function() return CollectionService:GetTagged(tag) end)
             if okTagged and taggedList then
                 for _, tagged in ipairs(taggedList) do
-                    if tagged:IsA("Model") or tagged:IsA("BasePart") then Ingest(tagged) end
+                    Ingest(tagged)
                 end
             end
         end
@@ -447,7 +456,12 @@ do
             if child:IsA("Model") then
                 local hasHum = child:FindFirstChildOfClass("Humanoid")
                 local name = child.Name:lower()
-                if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("bot") then
+                if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") then
+                    Ingest(child)
+                end
+            elseif child:IsA("BasePart") and child.Parent == Workspace then
+                local name = child.Name:lower()
+                if name:find("target") or name:find("dummy") or name:find("hitbox") then
                     Ingest(child)
                 end
             end
@@ -479,6 +493,7 @@ do
         local mode = priorityMode or "Crosshair"
         local now = os.clock()
         local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
+        local fovRadiusLimit = (maxFovDeg / 2.0)
 
         for _, obj in ipairs(candidates) do
             local pos, _, label = self:ResolvePivotPosition(obj, preferredBone)
@@ -489,7 +504,7 @@ do
                     local dir = displacement / dist
                     local dot = math.clamp(camLookVector:Dot(dir), -1.0, 1.0)
                     local angleDeg = math.deg(math.acos(dot))
-                    if angleDeg <= maxFovDeg then
+                    if angleDeg <= fovRadiusLimit then
                         local hum = obj:FindFirstChildOfClass("Humanoid") or (obj:IsA("Model") and obj:FindFirstChildWhichIsA("Humanoid", true))
                         local health = hum and hum.Health or 100
 
@@ -503,7 +518,7 @@ do
                         end
 
                         if isStickyActive and obj == self.LockedTarget then
-                            score = score * 0.65
+                            score = score * 0.60
                         end
 
                         if score < bestScore then
@@ -558,13 +573,25 @@ do
         self.RayParams.FilterDescendantsInstances = instances
     end
 
-    function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3): boolean
+    function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, targetInstance: Instance?): boolean
         local displacement = (targetPos - originPos)
         local dist = displacement.Magnitude
         if dist < EPSILON then return false end
         local dir = displacement / dist
         local result = Workspace:Raycast(originPos, dir * dist, self.RayParams)
-        return (result ~= nil)
+        if not result then return false end
+
+        if targetInstance and result.Instance then
+            if result.Instance == targetInstance or result.Instance:IsDescendantOf(targetInstance) then
+                return false
+            end
+        end
+
+        if (result.Position - targetPos).Magnitude < 0.6 then
+            return false
+        end
+
+        return true
     end
 
     function VectorTracker:EstimateVelocity(inst: Instance, currentPos: Vector3): Vector3
@@ -611,8 +638,7 @@ do
         local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
         local angularErrorDeg = math.deg(math.acos(dot))
 
-        -- Zona morta de micro-ajuste (previne tremores e oscilações minúsculas no alvo)
-        if angularErrorDeg < 0.12 then
+        if angularErrorDeg < 0.04 then
             return currentCFrame, angularErrorDeg, 0
         end
 
@@ -622,11 +648,16 @@ do
         local hermiteFactor = normErr * normErr * (3.0 - 2.0 * normErr)
         hermiteFactor = math.pow(hermiteFactor, accelExponent or 1.25)
 
-        local baseAlpha = math.clamp(smoothingFactor or 0.15, 0.005, 1.0)
-        local k = (baseAlpha * 26.0) * (0.35 + 0.65 * hermiteFactor)
+        local safeSmooth = math.clamp(smoothingFactor or 0.15, 0.01, 1.0)
+        local responseRate = 1.0 / safeSmooth
+        local k = responseRate * (0.65 + 0.35 * hermiteFactor)
         local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
-        -- Aplica clamp de velocidade angular máxima se requisitado
+        if angularErrorDeg < 0.25 then
+            local deadzoneWeight = math.clamp((angularErrorDeg - 0.04) / 0.21, 0.05, 1.0)
+            dynamicAlpha = dynamicAlpha * deadzoneWeight
+        end
+
         if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
             local maxDegThisFrame = maxAngularVel * safeDt
             if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
@@ -638,8 +669,8 @@ do
 
         if simulateJitter and intensity and intensity > 0 then
             local now = os.clock()
-            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.25
-            if jitterFactor > 0.01 then
+            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.20
+            if jitterFactor > 0.005 then
                 local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
                 local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
                 smoothedCFrame = smoothedCFrame * CFrame.Angles(math.rad(noiseX), math.rad(noiseY), 0)
@@ -671,12 +702,11 @@ do
         return targetRotation, 0, angularVelocity
     end
 
-    -- Simulação de Silent Aim (Vetor de Disparo Desacoplado)
     function VectorTracker:ComputeSilentAimVector(
         cameraCFrame: CFrame,
         targetPosition: Vector3,
         maxFovDeg: number,
-        hitChancePercent: number
+        hitChancePercent: number?
     ): (boolean, Vector3, number)
         local eyePos = cameraCFrame.Position
         local displacement = (targetPosition - eyePos)
@@ -696,19 +726,95 @@ do
             return false, camForward, discrepancyAngleDeg
         end
 
-        local chance = math.clamp(hitChancePercent or 100.0, 0.0, 100.0)
-        if (math.random() * 100.0) > chance then
-            return false, camForward, discrepancyAngleDeg
+        if hitChancePercent ~= nil then
+            local chance = math.clamp(hitChancePercent, 0.0, 100.0)
+            if (math.random() * 100.0) > chance then
+                return false, camForward, discrepancyAngleDeg
+            end
         end
 
         return true, decoupledDirection, discrepancyAngleDeg
     end
 
-    -- Visualizador de Traçador (Tracer 3D para Validação Visual do Vetor de Disparo)
+    function VectorTracker:SimulateShot(
+        cameraCFrame: CFrame,
+        targetPosition: Vector3,
+        maxFovDeg: number,
+        hitChancePercent: number,
+        isObstructed: boolean?,
+        targetInstance: Instance?
+    ): {
+        Fired: boolean,
+        HitRegistered: boolean,
+        DiscrepancyAngleDeg: number,
+        MuzzlePosition: Vector3,
+        TargetPosition: Vector3,
+        ShotDirection: Vector3,
+        InFov: boolean,
+        IsObstructed: boolean
+    }
+        local muzzlePos = cameraCFrame.Position + cameraCFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
+        local displacement = (targetPosition - muzzlePos)
+        local dist = displacement.Magnitude
+
+        if dist < EPSILON then
+            return {
+                Fired = true,
+                HitRegistered = false,
+                DiscrepancyAngleDeg = 0,
+                MuzzlePosition = muzzlePos,
+                TargetPosition = targetPosition,
+                ShotDirection = cameraCFrame.LookVector,
+                InFov = false,
+                IsObstructed = isObstructed == true
+            }
+        end
+
+        local directDir = displacement / dist
+        local dot = math.clamp(cameraCFrame.LookVector:Dot(directDir), -1.0, 1.0)
+        local discrepancyAngleDeg = math.deg(math.acos(dot))
+        local inFov = (discrepancyAngleDeg <= maxFovDeg)
+
+        local hit = false
+        local shotDir = cameraCFrame.LookVector
+
+        if inFov and not isObstructed then
+            local roll = math.random() * 100.0
+            local chance = math.clamp(hitChancePercent, 0.0, 100.0)
+            if roll <= chance then
+                hit = true
+                shotDir = directDir
+            else
+                local missAngle = math.rad(math.random(3, 8))
+                local randAxis = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
+                shotDir = CFrame.fromAxisAngle(randAxis, missAngle):VectorToWorldSpace(directDir)
+            end
+        end
+
+        return {
+            Fired = true,
+            HitRegistered = hit,
+            DiscrepancyAngleDeg = discrepancyAngleDeg,
+            MuzzlePosition = muzzlePos,
+            TargetPosition = targetPosition,
+            ShotDirection = shotDir,
+            InFov = inFov,
+            IsObstructed = isObstructed == true
+        }
+    end
+
     function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color: Color3?, duration: number?)
         local ok, _ = pcall(function()
             local dist = (targetPos - origin).Magnitude
             if dist < 0.1 then return end
+
+            local container = Workspace:FindFirstChild("DeepHat_Tracers")
+            if not container or not container:IsA("Folder") then
+                local newFolder = Instance.new("Folder")
+                newFolder.Name = "DeepHat_Tracers"
+                newFolder.Parent = Workspace
+                container = newFolder
+            end
 
             local part = Instance.new("Part")
             part.Name = "DeepHat_SilentAimTracer"
@@ -721,7 +827,7 @@ do
             part.Transparency = 0.25
             part.Size = Vector3.new(0.08, 0.08, dist)
             part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
-            part.Parent = Workspace
+            part.Parent = container
 
             Debris:AddItem(part, duration or 0.12)
         end)
@@ -738,7 +844,8 @@ do
 
     function VisualOverlayRenderer.new()
         local self = setmetatable({}, VisualOverlayRenderer)
-        self.ActiveHighlights = setmetatable({}, { __mode = "k" }) :: { [Instance]: Highlight }
+        self.ActiveHighlights = {} :: { [Instance]: Highlight }
+        self.CleanupConnections = {} :: { [Instance]: RBXScriptConnection }
         self.Container = self:GetOrCreateContainer()
         return self
     end
@@ -767,6 +874,17 @@ do
 
         local hl = self.ActiveHighlights[target]
         if not hl or not hl.Parent then
+            local count = 0
+            for _, _ in pairs(self.ActiveHighlights) do count = count + 1 end
+            if count >= MAX_ACTIVE_HIGHLIGHTS then
+                for oldTarget, _ in pairs(self.ActiveHighlights) do
+                    if oldTarget ~= target then
+                        self:ClearTarget(oldTarget)
+                        break
+                    end
+                end
+            end
+
             local ok, newHl = pcall(function()
                 local inst = Instance.new("Highlight")
                 inst.Name = "HL_" .. target.Name
@@ -779,6 +897,19 @@ do
             if ok and newHl then
                 hl = newHl
                 self.ActiveHighlights[target] = hl
+
+                pcall(function()
+                    local conn: RBXScriptConnection? = nil
+                    conn = target.AncestryChanged:Connect(function(_, parent)
+                        if not parent then
+                            self:ClearTarget(target)
+                            if conn then conn:Disconnect() end
+                        end
+                    end)
+                    if conn then
+                        self.CleanupConnections[target] = conn
+                    end
+                end)
             end
         end
 
@@ -794,18 +925,58 @@ do
         end
     end
 
+    function VisualOverlayRenderer:SyncBatchHighlights(
+        candidates: { Instance }?,
+        primaryTarget: Instance?,
+        isPrimaryObstructed: boolean
+    )
+        local activeBatch: { [Instance]: boolean } = {}
+
+        if primaryTarget and primaryTarget:IsDescendantOf(game) then
+            self:UpdateTargetHighlight(primaryTarget, isPrimaryObstructed, true)
+            activeBatch[primaryTarget] = true
+        end
+
+        if candidates then
+            local maxSecondary = math.min(#candidates, MAX_ACTIVE_HIGHLIGHTS - 1)
+            local count = 0
+            for _, cand in ipairs(candidates) do
+                if cand ~= primaryTarget and cand:IsDescendantOf(game) then
+                    self:UpdateTargetHighlight(cand, false, false)
+                    activeBatch[cand] = true
+                    count = count + 1
+                    if count >= maxSecondary then break end
+                end
+            end
+        end
+
+        for inst, _ in pairs(self.ActiveHighlights) do
+            if not activeBatch[inst] then
+                self:ClearTarget(inst)
+            end
+        end
+    end
+
     function VisualOverlayRenderer:ClearTarget(target: Instance?)
         if not target then return end
         local hl = self.ActiveHighlights[target]
         if hl then pcall(function() hl:Destroy() end) end
         self.ActiveHighlights[target] = nil
+
+        local conn = self.CleanupConnections[target]
+        if conn then pcall(function() conn:Disconnect() end) end
+        self.CleanupConnections[target] = nil
     end
 
     function VisualOverlayRenderer:ClearAll()
         for _, hl in pairs(self.ActiveHighlights) do
             pcall(function() if hl then hl:Destroy() end end)
         end
+        for _, conn in pairs(self.CleanupConnections) do
+            pcall(function() if conn then conn:Disconnect() end end)
+        end
         table.clear(self.ActiveHighlights)
+        table.clear(self.CleanupConnections)
     end
 end
 
@@ -840,6 +1011,7 @@ do
     local EventLogListInstance: ScrollingFrame? = nil
     local TelemetryLabels: { [string]: TextLabel } = {}
     local PerformanceData = { Fps = 60, PeakAngVel = 0 }
+    local unsubscribeGlobal: (() -> ())? = nil
 
     local function AddCorner(parent: Instance, radius: number): UICorner
         local corner = Instance.new("UICorner")
@@ -1852,7 +2024,12 @@ do
             if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
         end)
 
-        SimConfig.SubscribeAll(function(key, val)
+        if unsubscribeGlobal then
+            unsubscribeGlobal()
+            unsubscribeGlobal = nil
+        end
+
+        unsubscribeGlobal = SimConfig.SubscribeAll(function(key, val)
             if key == "ActiveProfile" then
                 UpdateProfileUI(tostring(val))
             elseif key == "TargetRegion" then
@@ -1866,6 +2043,13 @@ do
                 end
             elseif syncInputs[key] and typeof(val) == "number" then
                 syncInputs[key](val)
+            end
+        end)
+
+        screenGui.Destroying:Connect(function()
+            if unsubscribeGlobal then
+                unsubscribeGlobal()
+                unsubscribeGlobal = nil
             end
         end)
 
@@ -1997,11 +2181,23 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 local isRightMouseDown = false
-UserInputService.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then isRightMouseDown = true end
+local isToggleAimActive = false
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isRightMouseDown = true
+        isToggleAimActive = not isToggleAimActive
+    end
 end)
+
 UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then isRightMouseDown = false end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        isRightMouseDown = false
+    end
+end)
+
+UserInputService.WindowFocusReleased:Connect(function()
+    isRightMouseDown = false
 end)
 
 local BIND_NAME = "DeepHat_StandaloneKernelPipeline"
@@ -2022,14 +2218,23 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 isObstructed = false,
                 targetName = "PAUSADO",
                 dt = dt,
-                mode = "PAUSED"
+                mode = "PAUSED",
+                decoupledAngle = 0,
+                silentAimActive = false
             })
             return
         end
 
-        local holdToAim = SimConfig.Get("HoldToAim") == true
-        local isRmbHeld = isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        local shouldAim = (not holdToAim) or isRmbHeld
+        local aimMode = SimConfig.Get("AimMode") or "HoldRMB"
+        local shouldAim = false
+        if aimMode == "AlwaysOn" then
+            shouldAim = true
+        elseif aimMode == "Toggle" then
+            shouldAim = isToggleAimActive
+        else -- "HoldRMB"
+            local holdToAim = SimConfig.Get("HoldToAim") ~= false
+            shouldAim = (not holdToAim) or isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        end
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
         local fov = tonumber(SimConfig.Get("FOV")) or 70.0
@@ -2074,7 +2279,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
         if bestTarget and targetPos then
             targetName = string.format("%s (%s - %d HP)", bestTarget.Name, targetLabel, math.floor(targetHealth or 100))
-            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos)
+            isObstructed = Tracker:CheckObstruction(camera.CFrame.Position, targetPos, bestTarget)
 
             local isTargetValid = true
             if visibleOnly and isObstructed then isTargetValid = false end
@@ -2086,35 +2291,45 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             end
 
             if enableESP then
-                Renderer:UpdateTargetHighlight(bestTarget, isObstructed, true)
+                Renderer:SyncBatchHighlights(Detector.CandidatePool, bestTarget, isObstructed)
             else
                 Renderer:ClearAll()
             end
 
-            -- Simulação de Silent Aim (Vetor Desacoplado)
+            -- Simulação de Silent Aim (Vetor Desacoplado da Câmera)
             if silentAimEnabled and isTargetValid then
-                local isSilentHit, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
+                local inFov, decoupledDir, discDeg = Tracker:ComputeSilentAimVector(
                     camera.CFrame,
                     aimPosition,
-                    silentAimFov,
-                    silentAimHitChance
+                    silentAimFov
                 )
-                if isSilentHit then
+                decoupledAngle = discDeg
+
+                if inFov then
                     silentAimActive = true
-                    decoupledAngle = discDeg
                     currentMode = "SILENT_AIM"
 
                     local now = os.clock()
-                    if silentAimTracer and shouldAim and (now - lastTracerTime) >= 0.065 then
+                    if shouldAim and (now - lastTracerTime) >= 0.10 then
                         lastTracerTime = now
-                        local muzzlePos = camera.CFrame.Position + camera.CFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
-                        Tracker:DrawTracerBeam(muzzlePos, aimPosition, Color3.fromRGB(255, 60, 75), 0.12)
+                        local shotResult = Tracker:SimulateShot(
+                            camera.CFrame,
+                            aimPosition,
+                            silentAimFov,
+                            silentAimHitChance,
+                            isObstructed,
+                            bestTarget
+                        )
+                        if silentAimTracer and shotResult.Fired then
+                            local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
+                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
+                        end
                     end
                 end
             end
 
-            -- Interpolação Cinemática da Câmera (Aimbot)
-            if shouldAim and isTargetValid and not silentAimActive then
+            -- Interpolação Cinemática da Câmera (Aimbot Convencional)
+            if shouldAim and isTargetValid and not silentAimEnabled then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
@@ -2151,7 +2366,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 isObstructed = isObstructed,
                 targetName = targetName,
                 dt = dt,
-                mode = currentMode
+                mode = currentMode,
+                decoupledAngle = decoupledAngle,
+                silentAimActive = silentAimActive
             })
             DashboardGUI:UpdateFovCircle()
         end

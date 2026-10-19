@@ -153,43 +153,50 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
     local seen: { [Instance]: boolean } = {}
 
     local function Ingest(inst: Instance)
-        if self:IsValidTarget(inst, teamCheck) and not seen[inst] then
-            seen[inst] = true
-            table.insert(newPool, inst)
+        if not inst then return end
+        -- Normaliza para a raiz da entidade (Model) se fizer parte de um personagem/NPC
+        local targetEntity = inst
+        if inst:IsA("BasePart") and inst.Parent and inst.Parent:IsA("Model") and inst.Parent ~= Workspace then
+            local parentModel = inst.Parent :: Model
+            if parentModel:FindFirstChildOfClass("Humanoid") or parentModel.PrimaryPart then
+                targetEntity = parentModel
+            end
+        end
+
+        if self:IsValidTarget(targetEntity, teamCheck) and not seen[targetEntity] then
+            seen[targetEntity] = true
+            table.insert(newPool, targetEntity)
         end
     end
 
-    -- 1. Jogadores
+    -- 1. Jogadores Concorrentes
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= self.LocalPlayer and p.Character then
             Ingest(p.Character)
         end
     end
 
-    -- 2. Pastas estruturadas
+    -- 2. Pastas estruturadas de NPCs / Inimigos (varredura plana de 1 nível para evitar N^2 partes)
     for _, folderName in ipairs(self.SearchFolders) do
         local container = Workspace:FindFirstChild(folderName)
         if container then
             for _, child in ipairs(container:GetChildren()) do
-                if child:IsA("Model") or child:IsA("BasePart") then Ingest(child) end
-            end
-            for _, desc in ipairs(container:GetDescendants()) do
-                if desc:IsA("Model") or desc:IsA("BasePart") then Ingest(desc) end
+                Ingest(child)
             end
         end
     end
 
-    -- 3. CollectionService Tags
+    -- 3. CollectionService Tags (NPCs registrados por tag)
     for _, tag in ipairs(self.KnownTags) do
         local okTagged, taggedList = pcall(function() return CollectionService:GetTagged(tag) end)
         if okTagged and taggedList then
             for _, tagged in ipairs(taggedList) do
-                if tagged:IsA("Model") or tagged:IsA("BasePart") then Ingest(tagged) end
+                Ingest(tagged)
             end
         end
     end
 
-    -- 4. Filhos da raiz do Workspace
+    -- 4. Filhos diretos da raiz do Workspace (Dummies e Modelos de Teste)
     for _, child in ipairs(Workspace:GetChildren()) do
         if child:IsA("Model") then
             local hasHum = child:FindFirstChildOfClass("Humanoid")
@@ -197,7 +204,7 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
             if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") then
                 Ingest(child)
             end
-        elseif child:IsA("BasePart") then
+        elseif child:IsA("BasePart") and child.Parent == Workspace then
             local name = child.Name:lower()
             if name:find("target") or name:find("dummy") or name:find("hitbox") then
                 Ingest(child)
@@ -232,6 +239,7 @@ function InstanceDetector:FindBestCandidate(
     local mode = priorityMode or "Crosshair"
     local now = os.clock()
     local isStickyActive = (self.LockedTarget ~= nil and now < self.LockExpiry and self:IsValidTarget(self.LockedTarget, teamCheck))
+    local fovRadiusLimit = (maxFovDeg / 2.0) -- Raio angular relativo ao retículo da tela
 
     for _, obj in ipairs(candidates) do
         local pos, _, label = self:ResolvePivotPosition(obj, preferredBone)
@@ -239,14 +247,14 @@ function InstanceDetector:FindBestCandidate(
             local displacement = (pos - originPos)
             local dist = displacement.Magnitude
 
-            -- Filtro de Raio
+            -- Filtro de Raio com guarda de singularidade
             if dist <= maxRadius and dist >= 0.05 then
                 local dir = displacement / dist
                 local dot = math.clamp(camLookVector:Dot(dir), -1.0, 1.0)
                 local angleDeg = math.deg(math.acos(dot))
 
-                -- Filtro de Campo de Visão (FOV)
-                if angleDeg <= maxFovDeg then
+                -- Filtro de Campo de Visão (FOV) estritamente alinhado com o raio do FOV Circle
+                if angleDeg <= fovRadiusLimit then
                     local hum = obj:FindFirstChildOfClass("Humanoid") or (obj:IsA("Model") and obj:FindFirstChildWhichIsA("Humanoid", true))
                     local health = hum and hum.Health or 100
 
@@ -259,9 +267,9 @@ function InstanceDetector:FindBestCandidate(
                         score = angleDeg
                     end
 
-                    -- Bônus de Stickiness para o alvo atualmente travado (evita alternância errática / flickering)
+                    -- Bônus de Stickiness para o alvo atualmente travado (elimina flickering)
                     if isStickyActive and obj == self.LockedTarget then
-                        score = score * 0.65
+                        score = score * 0.60
                     end
 
                     if score < bestScore then
