@@ -196,12 +196,18 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
         end
     end
 
-    -- 4. Filhos diretos da raiz do Workspace (Dummies e Modelos de Teste)
+    -- 4. Filhos diretos e subpastas da raiz do Workspace (Dummies, Rigs e Modelos de Teste)
     for _, child in ipairs(Workspace:GetChildren()) do
-        if child:IsA("Model") then
+        if child:IsA("Folder") then
+            for _, grandChild in ipairs(child:GetChildren()) do
+                if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
+                    Ingest(grandChild)
+                end
+            end
+        elseif child:IsA("Model") then
             local hasHum = child:FindFirstChildOfClass("Humanoid")
             local name = child.Name:lower()
-            if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") then
+            if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") then
                 Ingest(child)
             end
         elseif child:IsA("BasePart") and child.Parent == Workspace then
@@ -269,7 +275,7 @@ function InstanceDetector:FindBestCandidate(
 
                     -- Bônus de Stickiness para o alvo atualmente travado (elimina flickering)
                     if isStickyActive and obj == self.LockedTarget then
-                        score = score * 0.60
+                        score = score * 0.85
                     end
 
                     if score < bestScore then

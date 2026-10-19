@@ -738,6 +738,7 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- [ABA 2] CÂMERA & VETORES
     -- =========================================================================
     local pageCamera = pages["Camera"]
+    CreateToggleField(pageCamera, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"))
     CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
     CreateSliderField(pageCamera, "Campo de Visão Útil (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
     CreateSliderField(pageCamera, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
@@ -751,6 +752,73 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     -- [ABA 3] SIMULAÇÃO & COMPORTAMENTO
     -- =========================================================================
     local pageSim = pages["Simulation"]
+
+    -- Seletor de Modo de Mira (AimMode)
+    local aimModeRow = Instance.new("Frame")
+    aimModeRow.Size = UDim2.new(1, 0, 0, 36)
+    aimModeRow.BackgroundColor3 = THEME.BG_INPUT
+    aimModeRow.BackgroundTransparency = 0.5
+    aimModeRow.Parent = pageSim
+    AddCorner(aimModeRow, 6)
+    AddStroke(aimModeRow, THEME.BORDER, 1)
+
+    local aimModeLbl = Instance.new("TextLabel")
+    aimModeLbl.Size = UDim2.new(0, 110, 1, 0)
+    aimModeLbl.Position = UDim2.new(0, 10, 0, 0)
+    aimModeLbl.BackgroundTransparency = 1
+    aimModeLbl.Font = Enum.Font.GothamMedium
+    aimModeLbl.TextSize = 11
+    aimModeLbl.TextColor3 = THEME.TEXT_MAIN
+    aimModeLbl.TextXAlignment = Enum.TextXAlignment.Left
+    aimModeLbl.Text = "Modo de Mira:"
+    aimModeLbl.Parent = aimModeRow
+
+    local aimModeButtons: { [string]: TextButton } = {}
+    local aimModeOptions = {
+        { Id = "HoldRMB", Label = "Segurar RMB" },
+        { Id = "Toggle", Label = "Alternar" },
+        { Id = "AlwaysOn", Label = "Sempre Ativo" },
+    }
+
+    local function UpdateAimModeUI(activeId: string)
+        for id, btn in pairs(aimModeButtons) do
+            local isSel = (id == activeId)
+            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        end
+    end
+
+    local aimModeGrid = Instance.new("Frame")
+    aimModeGrid.Size = UDim2.new(1, -125, 0, 24)
+    aimModeGrid.Position = UDim2.new(0, 115, 0.5, -12)
+    aimModeGrid.BackgroundTransparency = 1
+    aimModeGrid.Parent = aimModeRow
+
+    local aimModeLayout = Instance.new("UIGridLayout")
+    aimModeLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
+    aimModeLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
+    aimModeLayout.Parent = aimModeGrid
+
+    for _, opt in ipairs(aimModeOptions) do
+        local aBtn = Instance.new("TextButton")
+        local isCurrent = (SimConfig.Get("AimMode") or "HoldRMB") == opt.Id
+        aBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
+        aBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        aBtn.Font = Enum.Font.GothamBold
+        aBtn.TextSize = 10
+        aBtn.Text = opt.Label
+        aBtn.Parent = aimModeGrid
+        AddCorner(aBtn, 4)
+        AddStroke(aBtn, THEME.BORDER, 1)
+        aimModeButtons[opt.Id] = aBtn
+
+        aBtn.MouseButton1Click:Connect(function()
+            SimConfig.Set("AimMode", opt.Id)
+            UpdateAimModeUI(opt.Id)
+            DashboardGUI.AddDiagnosticLog("AIM_MODE", "Modo de mira alterado para: " .. opt.Label, "INFO")
+        end)
+    end
+
     CreateToggleField(pageSim, "Segurar Botão Direito para Focar (Hold to Aim)", "HoldToAim", SimConfig.Get("HoldToAim"))
     CreateToggleField(pageSim, "Simular Micro-Variações Orgânicas (Perlin Jitter)", "SimulateJitter", SimConfig.Get("SimulateJitter"))
 

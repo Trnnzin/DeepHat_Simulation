@@ -30,6 +30,9 @@ export type TrackingTelemetry = {
 function VectorTracker.new(filterInstances: { Instance }?)
     local self = setmetatable({}, VectorTracker)
     self.CurrentCFrame = CFrame.identity
+    self.CurrentRotation = nil :: CFrame?
+    self.TrackingActive = false
+    self.LastRawCamRotation = nil :: CFrame?
     self.PreviousLookVector = Vector3.zAxis
     self.PreviousTime = os.clock()
     self.PreviousAngularVelocity = 0
@@ -40,9 +43,16 @@ function VectorTracker.new(filterInstances: { Instance }?)
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = filterInstances or {}
     rayParams.IgnoreWater = true
+    rayParams.RespectCanCollide = true
     self.RayParams = rayParams
 
     return self
+end
+
+function VectorTracker:ResetTracking()
+    self.TrackingActive = false
+    self.CurrentRotation = nil
+    self.LastRawCamRotation = nil
 end
 
 function VectorTracker:SetFilterInstances(instances: { Instance })
@@ -64,8 +74,15 @@ function VectorTracker:CheckObstruction(originPos: Vector3, targetPos: Vector3, 
         end
     end
 
-    -- Se o ponto de colisão estiver dentro da tolerância de proximidade do alvo (< 0.6 studs)
-    if (result.Position - targetPos).Magnitude < 0.6 then
+    -- Ignora peças quase transparentes (zonas de teste, triggers, visores) ou não-colidíveis
+    if result.Instance then
+        if result.Instance.CanCollide == false or result.Instance.Transparency >= 0.95 then
+            return false
+        end
+    end
+
+    -- Se o ponto de colisão estiver dentro da tolerância de proximidade do alvo (< 0.8 studs)
+    if (result.Position - targetPos).Magnitude < 0.8 then
         return false
     end
 
@@ -122,19 +139,38 @@ function VectorTracker:ComputeSmoothRotation(
 
     local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
 
-    -- Normalização segura no R3: u = D / ||D||
+    -- Matriz de Orientação Alvo via CFrame.lookAt
+    local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
+    local rawCamRot = currentCFrame.Rotation
+
+    -- Determina rotação base: se o tracker estiver ativo e já possuir rotação acumulada,
+    -- avança a partir do estado acumulado e incorpora qualquer delta de rotação do mouse do usuário
+    local startRotation: CFrame
+    if self.TrackingActive and self.CurrentRotation then
+        local userDelta = CFrame.identity
+        if self.LastRawCamRotation then
+            userDelta = self.LastRawCamRotation:Inverse() * rawCamRot
+        end
+        startRotation = self.CurrentRotation * userDelta
+    else
+        startRotation = rawCamRot
+        self.TrackingActive = true
+    end
+    self.LastRawCamRotation = rawCamRot
+
+    -- Normalização e cálculo angular relativo ao startRotation
+    local forward = startRotation.LookVector
     local unitDirection = displacement / distance
-    local forward = currentCFrame.LookVector
     local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
     local angularErrorDeg = math.deg(math.acos(dot))
 
-    -- Zona morta ultra-baixa com transição suave (elimina stutter em alvos lentos)
+    -- Se o erro for insignificante (< 0.04°), mantém a rotação estabilizada sem micro-trepidações
     if angularErrorDeg < 0.04 then
-        return currentCFrame, angularErrorDeg, 0
+        local safeCFrame = CFrame.new(originPos) * startRotation
+        self.CurrentRotation = startRotation
+        self.CurrentCFrame = safeCFrame
+        return safeCFrame, angularErrorDeg, 0
     end
-
-    -- Matriz de Orientação Alvo via CFrame.lookAt
-    local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
 
     -- Curva de aceleração Hermite Smoothstep com expoente configurável
     local normErr = math.clamp(angularErrorDeg / 70.0, 0.0, 1.0)
@@ -162,7 +198,11 @@ function VectorTracker:ComputeSmoothRotation(
         end
     end
 
-    local smoothedCFrame = currentCFrame:Lerp(targetRotation, dynamicAlpha)
+    -- Interpolação orientada pura (Lerp esférico da rotação)
+    local nextRotation = startRotation:Lerp(targetRotation.Rotation, dynamicAlpha)
+    self.CurrentRotation = nextRotation
+
+    local smoothedCFrame = CFrame.new(originPos) * nextRotation
 
     -- Injeção de Jitter Perlin Noise caso habilitado
     if simulateJitter and intensity and intensity > 0 then
@@ -303,12 +343,14 @@ function VectorTracker:SimulateShot(
         end
     end
 
+    local endPosition = hit and targetPosition or (muzzlePos + shotDir * dist)
+
     return {
         Fired = true,
         HitRegistered = hit,
         DiscrepancyAngleDeg = discrepancyAngleDeg,
         MuzzlePosition = muzzlePos,
-        TargetPosition = targetPosition,
+        TargetPosition = endPosition,
         ShotDirection = shotDir,
         InFov = inFov,
         IsObstructed = isObstructed == true

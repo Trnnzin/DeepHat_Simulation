@@ -53,6 +53,7 @@ do
     local PROFILES: { [string]: any } = {
         ["Normal"] = {
             SimulationActive = true,
+            AimbotEnabled = true,
             ActiveProfile = "Normal",
             ActiveTab = "Overview",
             FOV = 70.0,
@@ -91,6 +92,7 @@ do
         },
         ["Leve"] = {
             SimulationActive = true,
+            AimbotEnabled = true,
             ActiveProfile = "Leve",
             ActiveTab = "Overview",
             FOV = 45.0,
@@ -129,6 +131,7 @@ do
         },
         ["Medio"] = {
             SimulationActive = true,
+            AimbotEnabled = true,
             ActiveProfile = "Medio",
             ActiveTab = "Overview",
             FOV = 85.0,
@@ -167,6 +170,7 @@ do
         },
         ["Agressivo"] = {
             SimulationActive = true,
+            AimbotEnabled = true,
             ActiveProfile = "Agressivo",
             ActiveTab = "Overview",
             FOV = 120.0,
@@ -205,6 +209,7 @@ do
         },
         ["Custom"] = {
             SimulationActive = true,
+            AimbotEnabled = true,
             ActiveProfile = "Custom",
             ActiveTab = "Overview",
             FOV = 70.0,
@@ -452,11 +457,18 @@ do
             end
         end
 
+        -- 4. Filhos diretos e subpastas da raiz do Workspace (Dummies, Rigs e Modelos de Teste)
         for _, child in ipairs(Workspace:GetChildren()) do
-            if child:IsA("Model") then
+            if child:IsA("Folder") then
+                for _, grandChild in ipairs(child:GetChildren()) do
+                    if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
+                        Ingest(grandChild)
+                    end
+                end
+            elseif child:IsA("Model") then
                 local hasHum = child:FindFirstChildOfClass("Humanoid")
                 local name = child.Name:lower()
-                if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") then
+                if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") then
                     Ingest(child)
                 end
             elseif child:IsA("BasePart") and child.Parent == Workspace then
@@ -518,7 +530,7 @@ do
                         end
 
                         if isStickyActive and obj == self.LockedTarget then
-                            score = score * 0.60
+                            score = score * 0.85
                         end
 
                         if score < bestScore then
@@ -557,6 +569,9 @@ do
     function VectorTracker.new(filterInstances: { Instance }?)
         local self = setmetatable({}, VectorTracker)
         self.CurrentCFrame = CFrame.identity
+        self.CurrentRotation = nil :: CFrame?
+        self.TrackingActive = false
+        self.LastRawCamRotation = nil :: CFrame?
         self.PreviousLookVector = Vector3.zAxis
         self.NoiseSeed = math.random(1000, 9999)
         self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Instance]: { pos: Vector3, time: number, vel: Vector3 } }
@@ -565,8 +580,15 @@ do
         rayParams.FilterType = Enum.RaycastFilterType.Exclude
         rayParams.FilterDescendantsInstances = filterInstances or {}
         rayParams.IgnoreWater = true
+        rayParams.RespectCanCollide = true
         self.RayParams = rayParams
         return self
+    end
+
+    function VectorTracker:ResetTracking()
+        self.TrackingActive = false
+        self.CurrentRotation = nil
+        self.LastRawCamRotation = nil
     end
 
     function VectorTracker:SetFilterInstances(instances: { Instance })
@@ -587,7 +609,13 @@ do
             end
         end
 
-        if (result.Position - targetPos).Magnitude < 0.6 then
+        if result.Instance then
+            if result.Instance.CanCollide == false or result.Instance.Transparency >= 0.95 then
+                return false
+            end
+        end
+
+        if (result.Position - targetPos).Magnitude < 0.8 then
             return false
         end
 
@@ -633,16 +661,33 @@ do
         if distance < EPSILON then return currentCFrame, 0, 0 end
 
         local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
+        local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
+        local rawCamRot = currentCFrame.Rotation
+
+        local startRotation: CFrame
+        if self.TrackingActive and self.CurrentRotation then
+            local userDelta = CFrame.identity
+            if self.LastRawCamRotation then
+                userDelta = self.LastRawCamRotation:Inverse() * rawCamRot
+            end
+            startRotation = self.CurrentRotation * userDelta
+        else
+            startRotation = rawCamRot
+            self.TrackingActive = true
+        end
+        self.LastRawCamRotation = rawCamRot
+
+        local forward = startRotation.LookVector
         local unitDirection = displacement / distance
-        local forward = currentCFrame.LookVector
         local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
         local angularErrorDeg = math.deg(math.acos(dot))
 
         if angularErrorDeg < 0.04 then
-            return currentCFrame, angularErrorDeg, 0
+            local safeCFrame = CFrame.new(originPos) * startRotation
+            self.CurrentRotation = startRotation
+            self.CurrentCFrame = safeCFrame
+            return safeCFrame, angularErrorDeg, 0
         end
-
-        local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
 
         local normErr = math.clamp(angularErrorDeg / 70.0, 0.0, 1.0)
         local hermiteFactor = normErr * normErr * (3.0 - 2.0 * normErr)
@@ -665,7 +710,10 @@ do
             end
         end
 
-        local smoothedCFrame = currentCFrame:Lerp(targetRotation, dynamicAlpha)
+        local nextRotation = startRotation:Lerp(targetRotation.Rotation, dynamicAlpha)
+        self.CurrentRotation = nextRotation
+
+        local smoothedCFrame = CFrame.new(originPos) * nextRotation
 
         if simulateJitter and intensity and intensity > 0 then
             local now = os.clock()
@@ -791,12 +839,14 @@ do
             end
         end
 
+        local endPosition = hit and targetPosition or (muzzlePos + shotDir * dist)
+
         return {
             Fired = true,
             HitRegistered = hit,
             DiscrepancyAngleDeg = discrepancyAngleDeg,
             MuzzlePosition = muzzlePos,
-            TargetPosition = targetPosition,
+            TargetPosition = endPosition,
             ShotDirection = shotDir,
             InFov = inFov,
             IsObstructed = isObstructed == true
@@ -1619,6 +1669,7 @@ do
 
         -- ABA 2: CAMERA
         local pageCamera = pages["Camera"]
+        CreateToggleField(pageCamera, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"))
         CreateToggleField(pageCamera, "Forçar Limite Estrito de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
         CreateSliderField(pageCamera, "Campo de Visão Útil (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1)
         CreateSliderField(pageCamera, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01)
@@ -1630,6 +1681,73 @@ do
 
         -- ABA 3: SIMULAÇÃO
         local pageSim = pages["Simulation"]
+
+        -- Seletor de Modo de Mira (AimMode)
+        local aimModeRow = Instance.new("Frame")
+        aimModeRow.Size = UDim2.new(1, 0, 0, 36)
+        aimModeRow.BackgroundColor3 = THEME.BG_INPUT
+        aimModeRow.BackgroundTransparency = 0.5
+        aimModeRow.Parent = pageSim
+        AddCorner(aimModeRow, 6)
+        AddStroke(aimModeRow, THEME.BORDER, 1)
+
+        local aimModeLbl = Instance.new("TextLabel")
+        aimModeLbl.Size = UDim2.new(0, 110, 1, 0)
+        aimModeLbl.Position = UDim2.new(0, 10, 0, 0)
+        aimModeLbl.BackgroundTransparency = 1
+        aimModeLbl.Font = Enum.Font.GothamMedium
+        aimModeLbl.TextSize = 11
+        aimModeLbl.TextColor3 = THEME.TEXT_MAIN
+        aimModeLbl.TextXAlignment = Enum.TextXAlignment.Left
+        aimModeLbl.Text = "Modo de Mira:"
+        aimModeLbl.Parent = aimModeRow
+
+        local aimModeButtons: { [string]: TextButton } = {}
+        local aimModeOptions = {
+            { Id = "HoldRMB", Label = "Segurar RMB" },
+            { Id = "Toggle", Label = "Alternar" },
+            { Id = "AlwaysOn", Label = "Sempre Ativo" },
+        }
+
+        local function UpdateAimModeUI(activeId: string)
+            for id, btn in pairs(aimModeButtons) do
+                local isSel = (id == activeId)
+                btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
+                btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            end
+        end
+
+        local aimModeGrid = Instance.new("Frame")
+        aimModeGrid.Size = UDim2.new(1, -125, 0, 24)
+        aimModeGrid.Position = UDim2.new(0, 115, 0.5, -12)
+        aimModeGrid.BackgroundTransparency = 1
+        aimModeGrid.Parent = aimModeRow
+
+        local aimModeLayout = Instance.new("UIGridLayout")
+        aimModeLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
+        aimModeLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
+        aimModeLayout.Parent = aimModeGrid
+
+        for _, opt in ipairs(aimModeOptions) do
+            local aBtn = Instance.new("TextButton")
+            local isCurrent = (SimConfig.Get("AimMode") or "HoldRMB") == opt.Id
+            aBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
+            aBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            aBtn.Font = Enum.Font.GothamBold
+            aBtn.TextSize = 10
+            aBtn.Text = opt.Label
+            aBtn.Parent = aimModeGrid
+            AddCorner(aBtn, 4)
+            AddStroke(aBtn, THEME.BORDER, 1)
+            aimModeButtons[opt.Id] = aBtn
+
+            aBtn.MouseButton1Click:Connect(function()
+                SimConfig.Set("AimMode", opt.Id)
+                UpdateAimModeUI(opt.Id)
+                DashboardGUI.AddDiagnosticLog("AIM_MODE", "Modo de mira alterado para: " .. opt.Label, "INFO")
+            end)
+        end
+
         CreateToggleField(pageSim, "Segurar Botão Direito para Focar (Hold to Aim)", "HoldToAim", SimConfig.Get("HoldToAim"))
         CreateToggleField(pageSim, "Simular Micro-Variações Orgânicas (Perlin Jitter)", "SimulateJitter", SimConfig.Get("SimulateJitter"))
 
@@ -2181,23 +2299,29 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 end)
 
 local isRightMouseDown = false
+local isLeftMouseDown = false
 local isToggleAimActive = false
 
 UserInputService.InputBegan:Connect(function(input, gpe)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = true
         isToggleAimActive = not isToggleAimActive
+    elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isLeftMouseDown = true
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = false
+    elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isLeftMouseDown = false
     end
 end)
 
 UserInputService.WindowFocusReleased:Connect(function()
     isRightMouseDown = false
+    isLeftMouseDown = false
 end)
 
 local BIND_NAME = "DeepHat_StandaloneKernelPipeline"
@@ -2212,6 +2336,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
         local isActive = SimConfig.Get("SimulationActive") == true
         if not isActive then
+            Tracker:ResetTracking()
             Renderer:ClearAll()
             DashboardGUI:UpdateTelemetryDisplay({
                 angularVelocity = 0,
@@ -2225,6 +2350,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             return
         end
 
+        local aimbotEnabled = SimConfig.Get("AimbotEnabled") ~= false
         local aimMode = SimConfig.Get("AimMode") or "HoldRMB"
         local shouldAim = false
         if aimMode == "AlwaysOn" then
@@ -2235,6 +2361,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             local holdToAim = SimConfig.Get("HoldToAim") ~= false
             shouldAim = (not holdToAim) or isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
         end
+
+        local isFiring = shouldAim or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
         local fov = tonumber(SimConfig.Get("FOV")) or 70.0
@@ -2309,8 +2437,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                     silentAimActive = true
                     currentMode = "SILENT_AIM"
 
+                    -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s ao mirar ou atirar)
                     local now = os.clock()
-                    if shouldAim and (now - lastTracerTime) >= 0.10 then
+                    if isFiring and (now - lastTracerTime) >= 0.10 then
                         lastTracerTime = now
                         local shotResult = Tracker:SimulateShot(
                             camera.CFrame,
@@ -2329,7 +2458,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             end
 
             -- Interpolação Cinemática da Câmera (Aimbot Convencional)
-            if shouldAim and isTargetValid and not silentAimEnabled then
+            -- Executa somente quando o Aimbot estiver ativado pelo painel e Silent Aim não estiver sobrescrevendo
+            if aimbotEnabled and shouldAim and isTargetValid and not silentAimActive then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
@@ -2353,8 +2483,11 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                     camera.CFrame = smoothedCFrame
                     calculatedAngVel = angVel
                 end
+            else
+                Tracker:ResetTracking()
             end
         else
+            Tracker:ResetTracking()
             Renderer:ClearAll()
         end
 

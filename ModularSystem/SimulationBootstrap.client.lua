@@ -58,25 +58,31 @@ DashboardGUI.OnResetRequested = function()
     DashboardGUI.AddDiagnosticLog("PIPELINE", "Perfis e realces resetados.", "INFO")
 end
 
--- Gerenciamento de Input para Mira (RMB / MouseButton2) com Suporte a Modos
+-- Gerenciamento de Input para Mira (RMB / MouseButton2) e Disparo (LMB / MouseButton1)
 local isRightMouseDown = false
+local isLeftMouseDown = false
 local isToggleAimActive = false
 
 UserInputService.InputBegan:Connect(function(input, gpe)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = true
         isToggleAimActive = not isToggleAimActive
+    elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isLeftMouseDown = true
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         isRightMouseDown = false
+    elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
+        isLeftMouseDown = false
     end
 end)
 
 UserInputService.WindowFocusReleased:Connect(function()
     isRightMouseDown = false
+    isLeftMouseDown = false
 end)
 
 -- Pipeline de Renderização de Alta Frequência (RenderStepped)
@@ -93,6 +99,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
         local isSimulationActive = SimConfig.Get("SimulationActive") == true
         if not isSimulationActive then
+            Tracker:ResetTracking()
             Renderer:ClearAll()
             DashboardGUI:UpdateTelemetryDisplay({
                 angularVelocity = 0,
@@ -106,6 +113,7 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             return
         end
 
+        local aimbotEnabled = SimConfig.Get("AimbotEnabled") ~= false
         local aimMode = SimConfig.Get("AimMode") or "HoldRMB"
         local shouldAim = false
         if aimMode == "AlwaysOn" then
@@ -116,6 +124,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             local holdToAim = SimConfig.Get("HoldToAim") ~= false
             shouldAim = (not holdToAim) or isRightMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
         end
+
+        local isFiring = shouldAim or isLeftMouseDown or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
 
         local maxRadius = tonumber(SimConfig.Get("VectorRadius")) or 300.0
         local fov = tonumber(SimConfig.Get("FOV")) or 70.0
@@ -198,9 +208,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                     silentAimActive = true
                     currentMode = "SILENT_AIM"
 
-                    -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s)
+                    -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s ao mirar ou atirar)
                     local now = os.clock()
-                    if shouldAim and (now - lastTracerTime) >= 0.10 then
+                    if isFiring and (now - lastTracerTime) >= 0.10 then
                         lastTracerTime = now
                         local shotResult = Tracker:SimulateShot(
                             camera.CFrame,
@@ -219,8 +229,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             end
 
             -- 6. Interpolação Cinemática da Câmera (Aimbot Convencional)
-            -- Executa somente quando Silent Aim estiver desativado para preservar os dois modos
-            if shouldAim and isTargetValid and not silentAimEnabled then
+            -- Executa somente quando o Aimbot estiver ativado pelo painel e Silent Aim não estiver sobrescrevendo
+            if aimbotEnabled and shouldAim and isTargetValid and not silentAimActive then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
@@ -244,8 +254,11 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                     camera.CFrame = smoothedCFrame
                     calculatedAngVel = angVel
                 end
+            else
+                Tracker:ResetTracking()
             end
         else
+            Tracker:ResetTracking()
             Renderer:ClearAll()
         end
 

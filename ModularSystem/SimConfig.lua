@@ -11,6 +11,7 @@ SimConfig.__index = SimConfig
 export type ProfileData = {
     -- Estado Geral & Abas
     SimulationActive: boolean,
+    AimbotEnabled: boolean,     -- Ativador mestre do sistema de mira cinematica (Aimbot)
     ActiveProfile: string,      -- "Normal", "Leve", "Medio", "Agressivo", "Custom"
     ActiveTab: string,          -- "Overview", "Camera", "Simulation", "Vision", "Hitbox", "Diagnostics", "Performance", "Settings"
 
@@ -64,6 +65,7 @@ export type ProfileData = {
 local PROFILES: { [string]: ProfileData } = {
     ["Normal"] = {
         SimulationActive = true,
+        AimbotEnabled = true,
         ActiveProfile = "Normal",
         ActiveTab = "Overview",
         FOV = 70.0,
@@ -103,6 +105,7 @@ local PROFILES: { [string]: ProfileData } = {
     },
     ["Leve"] = {
         SimulationActive = true,
+        AimbotEnabled = true,
         ActiveProfile = "Leve",
         ActiveTab = "Overview",
         FOV = 45.0,
@@ -142,6 +145,7 @@ local PROFILES: { [string]: ProfileData } = {
     },
     ["Medio"] = {
         SimulationActive = true,
+        AimbotEnabled = true,
         ActiveProfile = "Medio",
         ActiveTab = "Overview",
         FOV = 85.0,
@@ -181,6 +185,7 @@ local PROFILES: { [string]: ProfileData } = {
     },
     ["Agressivo"] = {
         SimulationActive = true,
+        AimbotEnabled = true,
         ActiveProfile = "Agressivo",
         ActiveTab = "Overview",
         FOV = 120.0,
@@ -220,6 +225,7 @@ local PROFILES: { [string]: ProfileData } = {
     },
     ["Custom"] = {
         SimulationActive = true,
+        AimbotEnabled = true,
         ActiveProfile = "Custom",
         ActiveTab = "Overview",
         FOV = 70.0,

@@ -89,11 +89,17 @@ local camOrigin = CFrame.new(Vector3.new(0, 5, 0), Vector3.new(0, 5, 10))
 local offTarget = Vector3.new(40, 5, 40) -- Ângulo de 45 graus
 
 -- Perfil Agressivo (Smoothing baixo = alta resposta)
+tracker:ResetTracking()
 local aggressiveCFrame, _, aggressiveVel = tracker:ComputeSmoothRotation(camOrigin, offTarget, 0.016, 0.02, 1.0, false, 0, 500, false)
+tracker:ResetTracking()
 -- Perfil Suave (Smoothing alto = movimento suave/lento)
 local smoothCFrame, _, smoothVel = tracker:ComputeSmoothRotation(camOrigin, offTarget, 0.016, 0.28, 1.0, false, 0, 500, false)
 
 Assert(aggressiveVel > smoothVel, "Perfil com Smoothing menor (Agressivo) produziu maior velocidade de resposta que Smoothing alto (Suave)")
+
+-- Teste de ResetTracking
+tracker:ResetTracking()
+Assert(tracker.TrackingActive == false and tracker.CurrentRotation == nil, "Tracker:ResetTracking liberou o estado acumulado da mira")
 
 -- Limitação estrita de velocidade angular (Clamp)
 local largeAngleTarget = Vector3.new(0, 5, -100) -- Alvo a 180 graus
@@ -203,6 +209,7 @@ unreg()
 
 SimConfig.LoadProfile("Agressivo")
 Assert(SimConfig.Get("Smoothing") == 0.02, "Carregamento de perfil sobrescreveu parâmetros corretamente")
+Assert(SimConfig.Get("AimbotEnabled") == true, "Parâmetro 'AimbotEnabled' carregado com sucesso no perfil")
 SimConfig.LoadProfile("Normal")
 
 -- -------------------------------------------------------------------------
