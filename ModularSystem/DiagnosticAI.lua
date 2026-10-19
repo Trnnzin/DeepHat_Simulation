@@ -57,14 +57,26 @@ function DiagnosticAI.AnalyzeSystemState(
     metrics["VelocidadeAngular"] = string.format("%.1f °/s", angVel)
     metrics["LinhaDeVisada"] = isObstructed and "OBSTRUÍDO" or "LIVRE"
 
-    -- 1. Diagnóstico de Disparo / Silent Aim
+    -- 1. Diagnóstico de Disparo / Silent Aim (Pipeline em 5 Etapas)
     if lastShot and type(lastShot) == "table" then
-        if lastShot.Fired == true then
-            metrics["UltimoTiro"] = lastShot.HitRegistered and "ACERTO" or "DISPERSÃO"
+        if lastShot.Fired == true or lastShot.Outcome ~= nil then
+            metrics["UltimoTiro"] = lastShot.HitRegistered and "ACERTO" or "FALHA / DISPERSÃO"
             metrics["DesvioTiro"] = string.format("%.1f°", lastShot.DiscrepancyAngleDeg or 0)
             metrics["TipoBalistico"] = tostring(lastShot.TrajectoryType or "Instant")
+            metrics["Resultado"] = tostring(lastShot.Outcome or "NENHUM")
 
-            if not lastShot.InFov then
+            local outcome = lastShot.Outcome
+            if outcome == "SUCCESS" or (outcome == nil and lastShot.HitRegistered == true and lastShot.InFov == true and not lastShot.IsObstructed) then
+                return {
+                    Timestamp = timeNow,
+                    Status = "HEALTHY",
+                    Summary = "Disparo simulado bem-sucedido com colisão física confirmada (nominal) no alvo sintético.",
+                    AffectedModule = "Nenhum",
+                    RootCause = "Trajetória balística calculada e verificada com sucesso em todas as 5 etapas.",
+                    SuggestedAction = "Sistema de disparo validado. Prossiga com os testes dinâmicos de movimentação.",
+                    MetricHighlights = metrics,
+                }
+            elseif outcome == "TARGET_OUTSIDE_FOV" or (outcome == nil and lastShot.InFov == false) then
                 return {
                     Timestamp = timeNow,
                     Status = "WARNING",
@@ -74,24 +86,54 @@ function DiagnosticAI.AnalyzeSystemState(
                     SuggestedAction = "Aumente o campo 'Silent Aim FOV' no painel ou aponte a câmera mais próximo ao manequim de teste.",
                     MetricHighlights = metrics,
                 }
-            elseif lastShot.IsObstructed then
+            elseif outcome == "OBSTACLE_BLOCKED" or (outcome == nil and lastShot.IsObstructed == true) then
                 return {
                     Timestamp = timeNow,
                     Status = "WARNING",
-                    Summary = "Disparo bloqueado por oclusão de geometria (Parede detectada).",
-                    AffectedModule = "VectorTracker (Line of Sight)",
-                    RootCause = "Existe um colisor sólido entre o ponto de disparo e o alvo de teste.",
-                    SuggestedAction = "Posicione o manequim de teste em linha de visão desobstruída ou desative temporariamente a opção 'Visible Only'.",
+                    Summary = "Disparo bloqueado por obstáculo sólido antes de atingir o alvo de teste.",
+                    AffectedModule = "VectorTracker (Raycast / Colisão no Workspace)",
+                    RootCause = "Raycast de colisão detectou uma barreira ou obstáculo interceptando a trajetória do projétil.",
+                    SuggestedAction = "Remova o obstáculo ou posicione o manequim de teste em linha de visão desobstruída.",
                     MetricHighlights = metrics,
                 }
-            elseif not lastShot.HitRegistered then
+            elseif outcome == "TARGET_INVALID" then
                 return {
                     Timestamp = timeNow,
                     Status = "WARNING",
-                    Summary = "Disparo simulou dispersão intencional baseada na probabilidade (Hit Chance).",
+                    Summary = "Disparo abortado: alvo de teste foi removido ou destruído.",
+                    AffectedModule = "InstanceDetector / Ciclo de Vida",
+                    RootCause = "O modelo de teste perdeu o Humanoid, teve sua vida zerada ou foi deletado do Workspace.",
+                    SuggestedAction = "Clique no botão 'Spawnar Alvo Sintético' no painel para criar um novo manequim.",
+                    MetricHighlights = metrics,
+                }
+            elseif outcome == "PROBABILISTIC_SPREAD" or (outcome == nil and lastShot.HitRegistered == false) then
+                return {
+                    Timestamp = timeNow,
+                    Status = "HEALTHY",
+                    Summary = "Disparo simulou dispersão probabilística intencional baseada no Hit Chance.",
                     AffectedModule = "VectorTracker (SimulateShot)",
-                    RootCause = "A probabilidade de acerto configurada (Hit Chance) causou uma dispersão estatística de teste.",
+                    RootCause = "A probabilidade de acerto configurada (Hit Chance) causou uma dispersão probabilística de teste.",
                     SuggestedAction = "Para acertos 100% determinísticos em testes de controle, configure 'Hit Chance' para 100%.",
+                    MetricHighlights = metrics,
+                }
+            elseif outcome == "MODULE_DISABLED" then
+                return {
+                    Timestamp = timeNow,
+                    Status = "WARNING",
+                    Summary = "Disparo rejeitado: o módulo de Silent Aim está desativado.",
+                    AffectedModule = "SimConfig (SilentAimEnabled)",
+                    RootCause = "A opção 'SilentAimEnabled' está desativada no painel de controle.",
+                    SuggestedAction = "Ative a opção 'Ativar Simulação de Silent Aim' na aba 'Disparos Simulados'.",
+                    MetricHighlights = metrics,
+                }
+            elseif outcome == "INVALID_TRAJECTORY" then
+                return {
+                    Timestamp = timeNow,
+                    Status = "CRITICAL",
+                    Summary = "Trajetória inválida detectada no cálculo vetorial.",
+                    AffectedModule = "VectorTracker (Cálculo Vetorial)",
+                    RootCause = "Distância até o alvo nula, infinita ou coordenadas NaN detectadas.",
+                    SuggestedAction = "Verifique a posição da câmera e certifique-se de que a distância seja superior a 0.1 studs.",
                     MetricHighlights = metrics,
                 }
             end
@@ -202,7 +244,7 @@ function DiagnosticAI.QueryChatbot(query: string, liveState: any?): ChatbotRespo
         if liveState and liveState.SimConfig and liveState.SimConfig.Get("SilentAimEnabled") == false then
             ans = ans .. "ATENÇÃO: Silent Aim está desativado no painel. Ative-o na aba 'Disparos Simulados'."
         else
-            ans = ans .. "Fluxo auditado em 4 etapas: [1] Solicitação Recebida -> [2] Dados Validados -> [3] Trajetória Calculada -> [4] Resultado Verificado. "
+            ans = ans .. "Fluxo auditado em 5 etapas: [1] Solicitação Recebida -> [2] Dados Validados -> [3] Trajetória Calculada -> [4] Colisão Verificada -> [5] Resultado Final. "
             if analysis.Status ~= "HEALTHY" then
                 ans = ans .. "Diagnóstico atual: " .. analysis.Summary
             else

@@ -364,4 +364,56 @@ function InstanceDetector:FindBestCandidate(
     return bestTarget, bestPos, finalDist, finalAngle, finalLabel, finalHealth
 end
 
+-- Construtor Auxiliar de Alvo Sintético Autorizado para Testes de Simulação
+function InstanceDetector.SpawnSyntheticDummy(position: Vector3, customName: string?): Model
+    local folder = Workspace:FindFirstChild("DeepHat_TestTargets")
+    if not folder or not folder:IsA("Folder") then
+        local newF = Instance.new("Folder")
+        newF.Name = "DeepHat_TestTargets"
+        newF.Parent = Workspace
+        folder = newF
+    end
+
+    local dummy = Instance.new("Model")
+    dummy.Name = customName or "DeepHat_SyntheticDummy"
+
+    local root = Instance.new("Part")
+    root.Name = "HumanoidRootPart"
+    root.Size = Vector3.new(2, 2, 1)
+    root.Position = position
+    root.Anchored = true
+    root.CanCollide = false
+    root.Transparency = 1
+    root.Parent = dummy
+
+    local torso = Instance.new("Part")
+    torso.Name = "UpperTorso"
+    torso.Size = Vector3.new(2, 2, 1)
+    torso.Position = position + Vector3.new(0, 1.0, 0)
+    torso.Anchored = true
+    torso.CanCollide = true
+    torso.Material = Enum.Material.SmoothPlastic
+    torso.Color = Color3.fromRGB(60, 65, 75)
+    torso.Parent = dummy
+
+    local head = Instance.new("Part")
+    head.Name = "Head"
+    head.Size = Vector3.new(1.2, 1.2, 1.2)
+    head.Position = position + Vector3.new(0, 2.5, 0)
+    head.Anchored = true
+    head.CanCollide = true
+    head.Material = Enum.Material.SmoothPlastic
+    head.Color = Color3.fromRGB(230, 230, 235)
+    head.Parent = dummy
+
+    local hum = Instance.new("Humanoid")
+    hum.Health = 100
+    hum.MaxHealth = 100
+    hum.Parent = dummy
+
+    dummy.PrimaryPart = root
+    dummy.Parent = folder
+    return dummy
+end
+
 return InstanceDetector

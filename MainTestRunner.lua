@@ -801,6 +801,85 @@ local r90 = CalcRadius(90, 70, 1080)
 Assert(r30 < r60 and r60 < r90, "Fórmula óptica do círculo de FOV cresce monotonicamente com o ângulo angular")
 Assert(r30 > 0 and r60 > 0 and r90 > 0, "Raio projetado em pixels é estritamente positivo e não nulo")
 
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 27] PIPELINE DE DISPARO EM 5 ETAPAS E CENÁRIOS FUNCIONAIS DE TESTE
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 27] Validando Pipeline de Disparo em 5 Etapas e Cenários Funcionais...")
+local shotTracker = VectorTracker.new({})
+
+-- 1. Cenário: Acerto Livre (Clear Hit) -> SUCCESS
+local resClear = ScenarioRunner.RunShotScenario(shotTracker, "clear_hit")
+Assert(resClear ~= nil, "Cenário 'clear_hit' executado")
+if resClear then
+    Assert(resClear.Outcome == "SUCCESS" and resClear.Success == true, "Cenário 'clear_hit' produziu resultado SUCCESS com colisão física")
+    Assert(resClear.StagesCompleted ~= nil and #resClear.StagesCompleted == 5, "Pipeline de 5 etapas concluído integralmente no acerto")
+    Assert(resClear.Stage == "RESULTADO_FINAL", "Última etapa alcançada: RESULTADO_FINAL")
+end
+
+-- 2. Cenário: Parede Bloqueando -> OBSTACLE_BLOCKED
+local resWall = ScenarioRunner.RunShotScenario(shotTracker, "wall_blocked")
+Assert(resWall ~= nil, "Cenário 'wall_blocked' executado")
+if resWall then
+    Assert(resWall.Outcome == "OBSTACLE_BLOCKED" and resWall.Success == false, "Cenário 'wall_blocked' identificou colisão com obstáculo intermediário")
+    Assert(resWall.ObstacleName ~= nil, string.format("Nome do obstáculo identificado: %s", tostring(resWall.ObstacleName)))
+end
+
+-- 3. Cenário: Alvo Fora do FOV -> TARGET_OUTSIDE_FOV
+local resFov = ScenarioRunner.RunShotScenario(shotTracker, "outside_fov")
+Assert(resFov ~= nil, "Cenário 'outside_fov' executado")
+if resFov then
+    Assert(resFov.Outcome == "TARGET_OUTSIDE_FOV" and resFov.Success == false, "Cenário 'outside_fov' rejeitou disparo em etapa de validação")
+    Assert(resFov.Stage == "VALIDADO", "Disparo fora de FOV interrompido na etapa VALIDADO")
+end
+
+-- 4. Cenário: Alvo Destruído -> TARGET_INVALID
+local resDest = ScenarioRunner.RunShotScenario(shotTracker, "target_destroyed")
+Assert(resDest ~= nil, "Cenário 'target_destroyed' executado")
+if resDest then
+    Assert(resDest.Outcome == "TARGET_INVALID" and resDest.Success == false, "Cenário 'target_destroyed' detectou alvo ausente/destruído")
+end
+
+-- 5. Cenário: Balística Curva (Physics Arc) -> SUCCESS
+local resPhys = ScenarioRunner.RunShotScenario(shotTracker, "physics_arc")
+Assert(resPhys ~= nil, "Cenário 'physics_arc' executado")
+if resPhys then
+    Assert(resPhys.Outcome == "SUCCESS", "Cenário 'physics_arc' calculou arco sob gravidade e verificou colisão")
+    Assert(resPhys.TrajectoryType == "Physics", "Tipo de trajetória balística confirmado como Physics")
+end
+
+-- 6. Cenário: Dispersão Probabilística (0% Chance) -> PROBABILISTIC_SPREAD
+local resSpread = ScenarioRunner.RunShotScenario(shotTracker, "zero_hit_chance")
+Assert(resSpread ~= nil, "Cenário 'zero_hit_chance' executado")
+if resSpread then
+    Assert(resSpread.Outcome == "PROBABILISTIC_SPREAD" and resSpread.Success == false, "Cenário 'zero_hit_chance' confirmou miss por dispersão probabilística")
+end
+
+-- 7. Cenário: Módulo Desativado -> MODULE_DISABLED
+local resDisabled = ScenarioRunner.RunShotScenario(shotTracker, "disabled_module")
+Assert(resDisabled ~= nil, "Cenário 'disabled_module' executado")
+if resDisabled then
+    Assert(resDisabled.Outcome == "MODULE_DISABLED" and resDisabled.Success == false, "Cenário 'disabled_module' rejeitou disparo na etapa RECEBIDO")
+    Assert(resDisabled.Stage == "RECEBIDO", "Disparo com módulo desligado interrompido na etapa RECEBIDO")
+end
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 28] AUTOMAÇÃO DE ALVO SINTÉTICO (SPAWN DUMMY) E INTEGRAÇÃO DE TESTES
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 28] Validando Automação de Alvo Sintético (Spawn Dummy) e Tagging...")
+local autoDummy = InstanceDetector.SpawnSyntheticDummy(Vector3.new(0, 10, 60), "SyntheticDummy_AutoTest")
+Assert(autoDummy ~= nil, "InstanceDetector.SpawnSyntheticDummy instanciou modelo com sucesso")
+if autoDummy then
+    local testDet = InstanceDetector.new(0.1)
+    Assert(testDet:IsValidTarget(autoDummy) == true, "Manequim gerado automaticamente é reconhecido como alvo válido")
+    local dHead = autoDummy:FindFirstChild("Head")
+    local dHum = autoDummy:FindFirstChildOfClass("Humanoid")
+    local dHrp = autoDummy:FindFirstChild("HumanoidRootPart")
+    Assert(dHead ~= nil and dHum ~= nil and dHrp ~= nil, "Manequim contém anatomia completa (Head, HumanoidRootPart, Humanoid)")
+    Assert(autoDummy:GetAttribute("DeepHat_Synthetic") == true, "Manequim contém atributo de segurança 'DeepHat_Synthetic'")
+    autoDummy:Destroy()
+    Assert(testDet:IsValidTarget(autoDummy) == false, "Manequim destruído deixa imediatamente de ser alvo válido")
+end
+
 print(string.format("  Testes pulados: %d", SkippedTests))
 
 -- -------------------------------------------------------------------------

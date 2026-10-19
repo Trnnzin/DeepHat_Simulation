@@ -44,6 +44,8 @@ DashboardGUI.OnSaveRequested = nil :: (() -> ())?
 DashboardGUI.OnRunLosScenario = nil :: ((string) -> ())?
 DashboardGUI.OnClearLosHistory = nil :: (() -> ())?
 DashboardGUI.OnSimulateSilentAimShot = nil :: (() -> ())?
+DashboardGUI.OnSpawnTestDummy = nil :: (() -> ())?
+DashboardGUI.OnRunShotScenario = nil :: ((string) -> ())?
 DashboardGUI.OnQueryDiagnosticChatbot = nil :: ((string) -> any)?
 DashboardGUI.OnRunFullDiagnostic = nil :: (() -> any)?
 
@@ -120,13 +122,14 @@ end
 -- =========================================================================
 -- LOG DE DIAGNÓSTICOS EM TEMPO REAL
 -- =========================================================================
-function DashboardGUI.AddDiagnosticLog(source: string, message: string, level: "INFO" | "WARN" | "OK")
+function DashboardGUI.AddDiagnosticLog(source: string, message: string, level: ("INFO" | "WARN" | "OK" | "FAIL")?)
     if not EventLogListInstance or not EventLogListInstance.Parent then return end
 
     local color = THEME.TEXT_MAIN
     if level == "WARN" then color = THEME.WARNING
     elseif level == "OK" then color = THEME.SUCCESS
-    elseif level == "INFO" then color = THEME.INFO end
+    elseif level == "INFO" then color = THEME.INFO
+    elseif level == "FAIL" then color = THEME.ACCENT_RED end
 
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1, 0, 0, 20)
@@ -412,7 +415,7 @@ function DashboardGUI.Create(): ScreenGui
         pList.Parent = page
 
         local pPad = Instance.new("UIPadding")
-        pPad.PaddingTop = UDim.new(0, 12); pPad.PaddingBottom = UDim.new(0, 12)
+        pPad.PaddingTop = UDim.new(0, 12); pPad.PaddingBottom = UDim.new(0, 40)
         pPad.PaddingLeft = UDim.new(0, 14); pPad.PaddingRight = UDim.new(0, 14)
         pPad.Parent = page
 
@@ -889,15 +892,15 @@ function DashboardGUI.Create(): ScreenGui
     -- =========================================================================
     local pageSilent = pages["SilentAim"]
 
-    CreateSectionHeader(pageSilent, "SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO DA CÂMERA)")
+    CreateSectionHeader(pageSilent, "SIMULAÇÃO DE DISPAROS DESACOPLADOS (SILENT AIM)")
     CreateToggleField(pageSilent, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
     CreateSliderField(pageSilent, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1, "Cone angular máximo permitido para redirecionamento do tiro")
-    CreateSliderField(pageSilent, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5, "100% = Acerto determinístico | <100% = Dispersão estatística")
+    CreateSliderField(pageSilent, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5, "100% = Acerto determinístico | <100% = Dispersão probabilística")
     CreateToggleField(pageSilent, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
 
-    -- Card com Pipeline em 4 Etapas
+    -- Card com Pipeline em 5 Etapas e Telemetria de Colisão
     local pipelineCard = Instance.new("Frame")
-    pipelineCard.Size = UDim2.new(1, 0, 0, 80)
+    pipelineCard.Size = UDim2.new(1, 0, 0, 126)
     pipelineCard.BackgroundColor3 = THEME.BG_INPUT
     pipelineCard.Parent = pageSilent
     AddCorner(pipelineCard, 6)
@@ -911,57 +914,175 @@ function DashboardGUI.Create(): ScreenGui
     pTitle.TextSize = 10
     pTitle.TextColor3 = THEME.TEXT_MAIN
     pTitle.TextXAlignment = Enum.TextXAlignment.Left
-    pTitle.Text = "PIPELINE DE DIAGNÓSTICO AUDITADO (4 ETAPAS):"
+    pTitle.Text = "PIPELINE DE DISPARO AUDITADO (5 ETAPAS):"
     pTitle.Parent = pipelineCard
 
     local pSteps = Instance.new("TextLabel")
     pSteps.Size = UDim2.new(1, -16, 0, 16)
-    pSteps.Position = UDim2.new(0, 8, 0, 26)
+    pSteps.Position = UDim2.new(0, 8, 0, 24)
     pSteps.BackgroundTransparency = 1
     pSteps.Font = Enum.Font.Code
-    pSteps.TextSize = 9
+    pSteps.TextSize = 8.5
     pSteps.TextColor3 = THEME.TEXT_MUTED
     pSteps.TextXAlignment = Enum.TextXAlignment.Left
-    pSteps.Text = "[1] Solicitação Recebida  →  [2] Dados Validados  →  [3] Trajetória Calculada  →  [4] Resultado Verificado"
+    pSteps.Text = "[1] RECEBIDO → [2] VALIDADO → [3] TRAJETÓRIA → [4] COLISÃO FÍSICA → [5] RESULTADO"
     pSteps.Parent = pipelineCard
 
+    -- Linha 1: Estado do Módulo e Etapa Atual
     local pStatus1 = Instance.new("TextLabel")
     pStatus1.Size = UDim2.new(0.5, -10, 0, 16)
-    pStatus1.Position = UDim2.new(0, 8, 0, 50)
+    pStatus1.Position = UDim2.new(0, 8, 0, 44)
     pStatus1.BackgroundTransparency = 1
     pStatus1.Font = Enum.Font.GothamMedium
     pStatus1.TextSize = 10
     pStatus1.TextColor3 = THEME.TEXT_MUTED
     pStatus1.TextXAlignment = Enum.TextXAlignment.Left
-    pStatus1.Text = "Silent Aim: DESATIVADO"
+    pStatus1.Text = "Módulo: CARREGADO"
     pStatus1.Parent = pipelineCard
     TelemetryLabels["SilentAimStatus"] = pStatus1
 
+    local pCurrentStage = Instance.new("TextLabel")
+    pCurrentStage.Size = UDim2.new(0.5, -10, 0, 16)
+    pCurrentStage.Position = UDim2.new(0.5, 0, 0, 44)
+    pCurrentStage.BackgroundTransparency = 1
+    pCurrentStage.Font = Enum.Font.GothamMedium
+    pCurrentStage.TextSize = 10
+    pCurrentStage.TextColor3 = THEME.INFO
+    pCurrentStage.TextXAlignment = Enum.TextXAlignment.Right
+    pCurrentStage.Text = "Etapa: PRONTO"
+    pCurrentStage.Parent = pipelineCard
+    TelemetryLabels["SilentAimStage"] = pCurrentStage
+
+    -- Linha 2: Resultado do Último Disparo
     local pStatus2 = Instance.new("TextLabel")
-    pStatus2.Size = UDim2.new(0.5, -10, 0, 16)
-    pStatus2.Position = UDim2.new(0.5, 0, 0, 50)
+    pStatus2.Size = UDim2.new(1, -16, 0, 18)
+    pStatus2.Position = UDim2.new(0, 8, 0, 64)
     pStatus2.BackgroundTransparency = 1
-    pStatus2.Font = Enum.Font.GothamMedium
-    pStatus2.TextSize = 10
+    pStatus2.Font = Enum.Font.GothamBold
+    pStatus2.TextSize = 10.5
     pStatus2.TextColor3 = THEME.TEXT_MUTED
-    pStatus2.TextXAlignment = Enum.TextXAlignment.Right
-    pStatus2.Text = "Último Disparo: NENHUM"
+    pStatus2.TextXAlignment = Enum.TextXAlignment.Left
+    pStatus2.Text = "Último Disparo: NENHUM DISPARO EFETUADO"
     pStatus2.Parent = pipelineCard
     TelemetryLabels["LastShotStatus"] = pStatus2
 
+    -- Linha 3: Detalhes Físicos / Impacto
+    local pDetails = Instance.new("TextLabel")
+    pDetails.Size = UDim2.new(1, -16, 0, 16)
+    pDetails.Position = UDim2.new(0, 8, 0, 84)
+    pDetails.BackgroundTransparency = 1
+    pDetails.Font = Enum.Font.Code
+    pDetails.TextSize = 9
+    pDetails.TextColor3 = THEME.TEXT_MUTED
+    pDetails.TextXAlignment = Enum.TextXAlignment.Left
+    pDetails.Text = "Impacto: — | Parte: — | Desvio: — | Distância: —"
+    pDetails.Parent = pipelineCard
+    TelemetryLabels["SilentAimDetails"] = pDetails
+
+    -- Linha 4: Causa da Falha / Diagnóstico
+    local pFailureReason = Instance.new("TextLabel")
+    pFailureReason.Size = UDim2.new(1, -16, 0, 16)
+    pFailureReason.Position = UDim2.new(0, 8, 0, 102)
+    pFailureReason.BackgroundTransparency = 1
+    pFailureReason.Font = Enum.Font.GothamMedium
+    pFailureReason.TextSize = 9
+    pFailureReason.TextColor3 = THEME.TEXT_MUTED
+    pFailureReason.TextXAlignment = Enum.TextXAlignment.Left
+    pFailureReason.Text = "Diagnóstico: Aguardando execução do teste funcional."
+    pFailureReason.Parent = pipelineCard
+    TelemetryLabels["SilentAimReason"] = pFailureReason
+
+    -- Linha de Ações Principais (Disparo de Teste + Spawn Dummy com Debounce)
+    local shotActionRow = Instance.new("Frame")
+    shotActionRow.Size = UDim2.new(1, 0, 0, 36)
+    shotActionRow.BackgroundTransparency = 1
+    shotActionRow.Parent = pageSilent
+
+    local isShotTesting = false
     local testShotBtn = Instance.new("TextButton")
-    testShotBtn.Size = UDim2.new(1, 0, 0, 36)
+    testShotBtn.Size = UDim2.new(0.68, -4, 1, 0)
+    testShotBtn.Position = UDim2.new(0, 0, 0, 0)
     testShotBtn.BackgroundColor3 = THEME.ACCENT_RED
     testShotBtn.TextColor3 = THEME.TEXT_MAIN
     testShotBtn.Font = Enum.Font.GothamBold
-    testShotBtn.TextSize = 11
-    testShotBtn.Text = "🎯 DISPARAR SIMULAÇÃO SILENT AIM (TESTE MANUAL 4 ETAPAS)"
-    testShotBtn.Parent = pageSilent
+    testShotBtn.TextSize = 10.5
+    testShotBtn.Text = "🎯 DISPARAR TESTE SILENT AIM (5 ETAPAS)"
+    testShotBtn.Parent = shotActionRow
     AddCorner(testShotBtn, 6)
     AddStroke(testShotBtn, THEME.BORDER_LIGHT, 1)
+
+    local spawnDummyBtn = Instance.new("TextButton")
+    spawnDummyBtn.Size = UDim2.new(0.32, -4, 1, 0)
+    spawnDummyBtn.Position = UDim2.new(0.68, 4, 0, 0)
+    spawnDummyBtn.BackgroundColor3 = THEME.BG_INPUT
+    spawnDummyBtn.TextColor3 = THEME.TEXT_MAIN
+    spawnDummyBtn.Font = Enum.Font.GothamBold
+    spawnDummyBtn.TextSize = 10
+    spawnDummyBtn.Text = "🤖 SPAWN DUMMY"
+    spawnDummyBtn.Parent = shotActionRow
+    AddCorner(spawnDummyBtn, 6)
+    AddStroke(spawnDummyBtn, THEME.BORDER, 1)
+
     testShotBtn.MouseButton1Click:Connect(function()
-        if DashboardGUI.OnSimulateSilentAimShot then DashboardGUI.OnSimulateSilentAimShot() end
+        if isShotTesting then return end
+        isShotTesting = true
+        testShotBtn.Text = "⏳ EXECUTANDO PIPELINE (5 ETAPAS)..."
+        testShotBtn.BackgroundColor3 = THEME.BORDER
+        task.defer(function()
+            if DashboardGUI.OnSimulateSilentAimShot then
+                DashboardGUI.OnSimulateSilentAimShot()
+            end
+            task.wait(0.35)
+            testShotBtn.Text = "🎯 DISPARAR TESTE SILENT AIM (5 ETAPAS)"
+            testShotBtn.BackgroundColor3 = THEME.ACCENT_RED
+            isShotTesting = false
+        end)
     end)
+
+    spawnDummyBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnSpawnTestDummy then
+            DashboardGUI.OnSpawnTestDummy()
+        end
+    end)
+
+    -- Grade de Cenários Reproduzíveis de Disparo
+    CreateSectionHeader(pageSilent, "CENÁRIOS REPRODUZÍVEIS DE DISPARO (TESTES FUNCIONAIS)")
+    local shotScenarioGrid = Instance.new("Frame")
+    shotScenarioGrid.Size = UDim2.new(1, 0, 0, 0)
+    shotScenarioGrid.AutomaticSize = Enum.AutomaticSize.Y
+    shotScenarioGrid.BackgroundTransparency = 1
+    shotScenarioGrid.Parent = pageSilent
+
+    local ssgLayout = Instance.new("UIGridLayout")
+    ssgLayout.CellSize = UDim2.new(0.485, 0, 0, 28)
+    ssgLayout.CellPadding = UDim2.new(0.03, 0, 0, 6)
+    ssgLayout.Parent = shotScenarioGrid
+
+    for _, sc in ipairs(ScenarioRunner.ShotScenarios) do
+        local scBtn = Instance.new("TextButton")
+        scBtn.BackgroundColor3 = THEME.BG_INPUT
+        scBtn.Font = Enum.Font.GothamMedium
+        scBtn.TextSize = 9.5
+        scBtn.TextColor3 = THEME.TEXT_MAIN
+        scBtn.Text = "▶ " .. sc.Label
+        scBtn.Parent = shotScenarioGrid
+        AddCorner(scBtn, 5)
+        AddStroke(scBtn, THEME.BORDER, 1)
+
+        scBtn.MouseButton1Click:Connect(function()
+            if isShotTesting then return end
+            isShotTesting = true
+            scBtn.TextColor3 = THEME.INFO
+            task.defer(function()
+                if DashboardGUI.OnRunShotScenario then
+                    DashboardGUI.OnRunShotScenario(sc.Id)
+                end
+                task.wait(0.35)
+                scBtn.TextColor3 = THEME.TEXT_MAIN
+                isShotTesting = false
+            end)
+        end)
+    end
 
     -- =========================================================================
     -- [ABA 3] BALÍSTICA (BALLISTICS & PHYSICS)
@@ -1068,6 +1189,94 @@ function DashboardGUI.Create(): ScreenGui
     -- =========================================================================
     local pageDiag = pages["Diagnostics"]
 
+    CreateSectionHeader(pageDiag, "AÇÕES DE DIAGNÓSTICO E AUDITORIA DO SISTEMA")
+
+    -- Botões de Ação Global de Diagnóstico
+    local diagActionRow = Instance.new("Frame")
+    diagActionRow.Size = UDim2.new(1, 0, 0, 34)
+    diagActionRow.BackgroundTransparency = 1
+    diagActionRow.Parent = pageDiag
+
+    local runDiagBtn = Instance.new("TextButton")
+    runDiagBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    runDiagBtn.Position = UDim2.new(0, 0, 0, 0)
+    runDiagBtn.BackgroundColor3 = THEME.ACCENT_RED
+    runDiagBtn.TextColor3 = THEME.TEXT_MAIN
+    runDiagBtn.Font = Enum.Font.GothamBold
+    runDiagBtn.TextSize = 10.5
+    runDiagBtn.Text = "🩺 EXECUTAR DIAGNÓSTICO COMPLETO"
+    runDiagBtn.Parent = diagActionRow
+    AddCorner(runDiagBtn, 6)
+    AddStroke(runDiagBtn, THEME.BORDER_LIGHT, 1)
+
+    local runShotBtn = Instance.new("TextButton")
+    runShotBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    runShotBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    runShotBtn.BackgroundColor3 = THEME.BG_INPUT
+    runShotBtn.TextColor3 = THEME.TEXT_MAIN
+    runShotBtn.Font = Enum.Font.GothamBold
+    runShotBtn.TextSize = 10.5
+    runShotBtn.Text = "🎯 TESTAR DISPARO SILENT AIM"
+    runShotBtn.Parent = diagActionRow
+    AddCorner(runShotBtn, 6)
+    AddStroke(runShotBtn, THEME.BORDER, 1)
+
+    -- Card com Status dos Módulos
+    local moduleStatusCard = Instance.new("Frame")
+    moduleStatusCard.Size = UDim2.new(1, 0, 0, 52)
+    moduleStatusCard.BackgroundColor3 = THEME.BG_INPUT
+    moduleStatusCard.Parent = pageDiag
+    AddCorner(moduleStatusCard, 6)
+    AddStroke(moduleStatusCard, THEME.BORDER, 1)
+
+    local msPad = Instance.new("UIPadding")
+    msPad.PaddingTop = UDim.new(0, 4)
+    msPad.PaddingBottom = UDim.new(0, 4)
+    msPad.PaddingLeft = UDim.new(0, 6)
+    msPad.PaddingRight = UDim.new(0, 6)
+    msPad.Parent = moduleStatusCard
+
+    local msLayout = Instance.new("UIGridLayout")
+    msLayout.CellSize = UDim2.new(0.24, 0, 1, 0)
+    msLayout.CellPadding = UDim2.new(0.013, 0, 0, 0)
+    msLayout.Parent = moduleStatusCard
+
+    local function MakeModuleBadge(modName: string, initialStatus: string, labelKey: string)
+        local box = Instance.new("Frame")
+        box.BackgroundColor3 = THEME.BG_WINDOW
+        box.Parent = moduleStatusCard
+        AddCorner(box, 4)
+        AddStroke(box, THEME.BORDER, 1)
+
+        local t1 = Instance.new("TextLabel")
+        t1.Size = UDim2.new(1, -6, 0, 16)
+        t1.Position = UDim2.new(0, 4, 0, 3)
+        t1.BackgroundTransparency = 1
+        t1.Font = Enum.Font.GothamBold
+        t1.TextSize = 9
+        t1.TextColor3 = THEME.TEXT_MAIN
+        t1.TextXAlignment = Enum.TextXAlignment.Left
+        t1.Text = modName
+        t1.Parent = box
+
+        local t2 = Instance.new("TextLabel")
+        t2.Size = UDim2.new(1, -6, 0, 18)
+        t2.Position = UDim2.new(0, 4, 0, 20)
+        t2.BackgroundTransparency = 1
+        t2.Font = Enum.Font.Code
+        t2.TextSize = 8.5
+        t2.TextColor3 = THEME.SUCCESS
+        t2.TextXAlignment = Enum.TextXAlignment.Left
+        t2.Text = initialStatus
+        t2.Parent = box
+        TelemetryLabels[labelKey] = t2
+    end
+
+    MakeModuleBadge("VectorTracker", "● MONITORANDO", "ModStatus_Tracker")
+    MakeModuleBadge("InstanceDetector", "● ATIVO", "ModStatus_Detector")
+    MakeModuleBadge("DiagnosticAI", "● OPERACIONAL", "ModStatus_Diagnostic")
+    MakeModuleBadge("Silent Aim", "○ PRONTO", "ModStatus_SilentAim")
+
     CreateSectionHeader(pageDiag, "ASSISTENTE INTELIGENTE & CHATBOT DE DIAGNÓSTICO")
 
     -- Chatbot UI Container
@@ -1140,6 +1349,15 @@ function DashboardGUI.Create(): ScreenGui
     MakeQuickButton("🎯 Testar Mira", "por que a mira não foca no alvo?")
     MakeQuickButton("⚡ Testar Balística", "como calibrar gravidade e tempo de voo?")
     MakeQuickButton("🛡️ Verificar Visada", "alvo está bloqueado ou ocluído?")
+
+    runDiagBtn.MouseButton1Click:Connect(function()
+        TriggerChatQuery("executar diagnóstico completo e status operacional de todos os módulos")
+    end)
+    runShotBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnSimulateSilentAimShot then
+            DashboardGUI.OnSimulateSilentAimShot()
+        end
+    end)
 
     -- Input Row do Chatbot
     local chatInputRow = Instance.new("Frame")
@@ -1520,16 +1738,100 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
         TelemetryLabels["ActiveTarget"].Text = tostring(data.targetName or "NENHUM")
     end
 
+    local saEnabled = SimConfig.Get("SilentAimEnabled") == true
     if TelemetryLabels["SilentAimStatus"] then
-        local sa = data.silentAimActive == true
-        TelemetryLabels["SilentAimStatus"].Text = sa and "Silent Aim: ATIVO" or "Silent Aim: DESATIVADO"
-        TelemetryLabels["SilentAimStatus"].TextColor3 = sa and THEME.SUCCESS or THEME.TEXT_MUTED
+        if data.lastShot then
+            if data.lastShot.Success == true then
+                TelemetryLabels["SilentAimStatus"].Text = "Módulo: ● TESTADO COM SUCESSO"
+                TelemetryLabels["SilentAimStatus"].TextColor3 = THEME.SUCCESS
+            else
+                TelemetryLabels["SilentAimStatus"].Text = "Módulo: ⚠️ FALHA NO TESTE"
+                TelemetryLabels["SilentAimStatus"].TextColor3 = THEME.ACCENT_RED
+            end
+        elseif saEnabled then
+            TelemetryLabels["SilentAimStatus"].Text = "Módulo: ◐ HABILITADO (AGUARDANDO)"
+            TelemetryLabels["SilentAimStatus"].TextColor3 = THEME.INFO
+        else
+            TelemetryLabels["SilentAimStatus"].Text = "Módulo: ○ DESATIVADO"
+            TelemetryLabels["SilentAimStatus"].TextColor3 = THEME.TEXT_MUTED
+        end
     end
 
-    if TelemetryLabels["LastShotStatus"] and data.lastShot then
+    if TelemetryLabels["ModStatus_SilentAim"] then
+        if data.lastShot then
+            if data.lastShot.Success == true then
+                TelemetryLabels["ModStatus_SilentAim"].Text = "● TESTADO OK"
+                TelemetryLabels["ModStatus_SilentAim"].TextColor3 = THEME.SUCCESS
+            else
+                TelemetryLabels["ModStatus_SilentAim"].Text = "▲ FALHA DETECTADA"
+                TelemetryLabels["ModStatus_SilentAim"].TextColor3 = THEME.ACCENT_RED
+            end
+        elseif saEnabled then
+            TelemetryLabels["ModStatus_SilentAim"].Text = "◐ HABILITADO"
+            TelemetryLabels["ModStatus_SilentAim"].TextColor3 = THEME.INFO
+        else
+            TelemetryLabels["ModStatus_SilentAim"].Text = "○ DESATIVADO"
+            TelemetryLabels["ModStatus_SilentAim"].TextColor3 = THEME.TEXT_MUTED
+        end
+    end
+
+    if data.lastShot then
         local ls = data.lastShot
-        TelemetryLabels["LastShotStatus"].Text = string.format("Último: %s (%.1f°)", ls.HitRegistered and "ACERTO" or "DISPERSÃO", ls.DiscrepancyAngleDeg or 0)
-        TelemetryLabels["LastShotStatus"].TextColor3 = ls.HitRegistered and THEME.SUCCESS or THEME.WARNING
+        local outcome = tostring(ls.Outcome or (ls.Success and "SUCCESS" or "UNKNOWN"))
+        local stagesCount = type(ls.StagesCompleted) == "table" and #ls.StagesCompleted or 5
+
+        if TelemetryLabels["SilentAimStage"] then
+            TelemetryLabels["SilentAimStage"].Text = string.format("Etapa: [%d/5] %s", stagesCount, ls.Stage or "FINAL")
+            TelemetryLabels["SilentAimStage"].TextColor3 = ls.Success and THEME.SUCCESS or THEME.WARNING
+        end
+
+        if TelemetryLabels["LastShotStatus"] then
+            local outcomeText = "NENHUM"
+            local outcomeColor = THEME.TEXT_MUTED
+            if outcome == "SUCCESS" then
+                outcomeText = "✅ ACERTO CONFIRMADO NO ALVO"
+                outcomeColor = THEME.SUCCESS
+            elseif outcome == "TARGET_OUTSIDE_FOV" then
+                outcomeText = "📐 FORA DO FOV MÁXIMO (REJEITADO)"
+                outcomeColor = THEME.WARNING
+            elseif outcome == "OBSTACLE_BLOCKED" then
+                outcomeText = "🛡️ TRAJETÓRIA BLOQUEADA POR OBSTÁCULO"
+                outcomeColor = THEME.ACCENT_RED
+            elseif outcome == "TARGET_INVALID" then
+                outcomeText = "❌ ALVO INVÁLIDO OU DESTRUÍDO"
+                outcomeColor = THEME.WARNING
+            elseif outcome == "INVALID_TRAJECTORY" then
+                outcomeText = "⚠️ TRAJETÓRIA OU DADOS INVÁLIDOS"
+                outcomeColor = THEME.WARNING
+            elseif outcome == "PROBABILISTIC_SPREAD" then
+                outcomeText = "🎲 DISPERSÃO PROBABILÍSTICA (MISS)"
+                outcomeColor = THEME.INFO
+            elseif outcome == "MODULE_DISABLED" then
+                outcomeText = "⏹ MÓDULO SILENT AIM DESATIVADO"
+                outcomeColor = THEME.TEXT_MUTED
+            elseif outcome == "INTERNAL_ERROR" then
+                outcomeText = "🛑 ERRO INTERNO NA EXECUÇÃO"
+                outcomeColor = THEME.ACCENT_RED
+            else
+                outcomeText = ls.Success and "ACERTO" or "FALHA"
+                outcomeColor = ls.Success and THEME.SUCCESS or THEME.WARNING
+            end
+            TelemetryLabels["LastShotStatus"].Text = string.format("Último Disparo: %s (%.1f°)", outcomeText, ls.DiscrepancyAngleDeg or 0)
+            TelemetryLabels["LastShotStatus"].TextColor3 = outcomeColor
+        end
+
+        if TelemetryLabels["SilentAimDetails"] then
+            local hitPartName = ls.HitPart and ls.HitPart.Name or "—"
+            local hitDist = ls.HitDistance and string.format("%.1f st", ls.HitDistance) or "—"
+            TelemetryLabels["SilentAimDetails"].Text = string.format("Impacto: %s | Parte: %s | Desvio: %.1f° | Dist: %s",
+                ls.HitRegistered and "CONFIRMADO" or "NÃO REGISTRADO", hitPartName, ls.DiscrepancyAngleDeg or 0, hitDist)
+        end
+
+        if TelemetryLabels["SilentAimReason"] then
+            local desc = ls.OutcomeDescription or ls.FailureReason or (ls.Success and "Trajetória e colisão validadas fisicamente no Workspace." or "Verifique as configurações.")
+            TelemetryLabels["SilentAimReason"].Text = "Diagnóstico: " .. desc
+            TelemetryLabels["SilentAimReason"].TextColor3 = ls.Success and THEME.SUCCESS or THEME.TEXT_MUTED
+        end
     end
 end
 

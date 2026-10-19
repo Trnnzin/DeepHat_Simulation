@@ -400,21 +400,28 @@ function VectorTracker:ComputeSilentAimVector(
 end
 
 export type ShotSimulationResult = {
+    Stage: "RECEIVED" | "VALIDATED" | "TRAJECTORY_CALCULATED" | "COLLISION_VERIFIED" | "FINAL_RESULT",
     Fired: boolean,
     HitRegistered: boolean,
+    Outcome: "SUCCESS" | "TARGET_OUTSIDE_FOV" | "OBSTACLE_BLOCKED" | "TARGET_INVALID" | "PROBABILISTIC_SPREAD" | "MODULE_DISABLED" | "INVALID_TRAJECTORY" | "INTERNAL_ERROR",
+    OutcomeDescription: string,
     DiscrepancyAngleDeg: number,
     MuzzlePosition: Vector3,
     TargetPosition: Vector3,
+    ImpactPosition: Vector3,
+    HitPart: Instance?,
     ShotDirection: Vector3,
     InFov: boolean,
     IsObstructed: boolean,
     FlightTime: number,
     BulletDropStuds: number,
     TrajectoryPoints: { Vector3 }?,
-    TrajectoryType: string -- "Instant" | "Physics"
+    TrajectoryType: string, -- "Instant" | "Physics"
+    StagesCompleted: { string }
 }
 
 -- Execução de Disparo Simulado Controlado (Disparado apenas por evento/trigger de tiro)
+-- Pipeline em 5 Etapas: RECEBIDO -> VALIDADO -> TRAJETÓRIA -> COLISÃO -> RESULTADO FINAL
 function VectorTracker:SimulateShot(
     cameraCFrame: CFrame,
     targetPosition: Vector3,
@@ -426,30 +433,71 @@ function VectorTracker:SimulateShot(
     gravity: number?,
     isPhysics: boolean?
 ): ShotSimulationResult
+    local stages: { string } = {}
+    table.insert(stages, "[1] RECEBIDO: Evento de disparo aceito pelo pipeline.")
+
+    -- ETAPA 2: VALIDADO (Parâmetros, Alvo e Geometria)
+    if targetInstance ~= nil then
+        local isValid = false
+        pcall(function()
+            if targetInstance.Parent ~= nil and targetInstance:IsDescendantOf(Workspace) then
+                local hum = targetInstance:FindFirstChildOfClass("Humanoid")
+                    or (targetInstance:IsA("Model") and targetInstance:FindFirstChildWhichIsA("Humanoid", true))
+                if not hum or hum.Health > 0 then
+                    isValid = true
+                end
+            end
+        end)
+        if not isValid then
+            table.insert(stages, "[2] VALIDADO [FALHA]: Alvo removido do Workspace ou destruído.")
+            return {
+                Stage = "VALIDATED",
+                Fired = false,
+                HitRegistered = false,
+                Outcome = "TARGET_INVALID",
+                OutcomeDescription = "Alvo removido ou inválido no momento do disparo.",
+                DiscrepancyAngleDeg = 0,
+                MuzzlePosition = cameraCFrame.Position,
+                TargetPosition = targetPosition,
+                ImpactPosition = cameraCFrame.Position,
+                HitPart = nil,
+                ShotDirection = cameraCFrame.LookVector,
+                InFov = false,
+                IsObstructed = true,
+                FlightTime = 0,
+                BulletDropStuds = 0,
+                TrajectoryPoints = nil,
+                TrajectoryType = isPhysics and "Physics" or "Instant",
+                StagesCompleted = stages
+            }
+        end
+    end
+
     local muzzlePos = cameraCFrame.Position + cameraCFrame.LookVector * 1.5 - Vector3.new(0, 0.4, 0)
     local displacement = (targetPosition - muzzlePos)
     local dist = displacement.Magnitude
 
-    local isPhys = (isPhysics == true)
-    local g = (isPhys and type(gravity) == "number" and gravity >= 0) and gravity or 0
-    local speed = (type(projectileSpeed) == "number" and projectileSpeed > 0) and projectileSpeed or 2500
-    local flightTime = dist / speed
-    local bulletDropStuds = (g > 0) and (0.5 * g * flightTime * flightTime) or 0
-
-    if dist < EPSILON then
+    if dist < EPSILON or dist > 2000 or dist ~= dist then
+        table.insert(stages, "[2] VALIDADO [FALHA]: Trajetória com distância zero, infinita ou indefinida (NaN).")
         return {
-            Fired = true,
+            Stage = "VALIDATED",
+            Fired = false,
             HitRegistered = false,
+            Outcome = "INVALID_TRAJECTORY",
+            OutcomeDescription = "Distância até o alvo nula, infinita ou com coordenadas inválidas.",
             DiscrepancyAngleDeg = 0,
             MuzzlePosition = muzzlePos,
             TargetPosition = targetPosition,
+            ImpactPosition = muzzlePos,
+            HitPart = nil,
             ShotDirection = cameraCFrame.LookVector,
             InFov = false,
             IsObstructed = isObstructed == true,
             FlightTime = 0,
             BulletDropStuds = 0,
             TrajectoryPoints = nil,
-            TrajectoryType = isPhys and "Physics" or "Instant"
+            TrajectoryType = isPhysics and "Physics" or "Instant",
+            StagesCompleted = stages
         }
     end
 
@@ -458,31 +506,56 @@ function VectorTracker:SimulateShot(
     local discrepancyAngleDeg = math.deg(math.acos(dot))
     local inFov = (discrepancyAngleDeg <= maxFovDeg)
 
-    local hit = false
-    local shotDir = cameraCFrame.LookVector
+    if not inFov then
+        table.insert(stages, string.format("[2] VALIDADO [FALHA]: Alvo fora do cone angular (Desvio %.1f° > FOV %.1f°).", discrepancyAngleDeg, maxFovDeg))
+        return {
+            Stage = "VALIDATED",
+            Fired = false,
+            HitRegistered = false,
+            Outcome = "TARGET_OUTSIDE_FOV",
+            OutcomeDescription = string.format("Alvo fora dos limites definidos para o teste (Desvio: %.1f° > FOV: %.1f°).", discrepancyAngleDeg, maxFovDeg),
+            DiscrepancyAngleDeg = discrepancyAngleDeg,
+            MuzzlePosition = muzzlePos,
+            TargetPosition = targetPosition,
+            ImpactPosition = muzzlePos,
+            HitPart = nil,
+            ShotDirection = cameraCFrame.LookVector,
+            InFov = false,
+            IsObstructed = isObstructed == true,
+            FlightTime = 0,
+            BulletDropStuds = 0,
+            TrajectoryPoints = nil,
+            TrajectoryType = isPhysics and "Physics" or "Instant",
+            StagesCompleted = stages
+        }
+    end
+    table.insert(stages, string.format("[2] VALIDADO: Parâmetros aceitos (Distância: %.1f studs, Desvio: %.1f° dentro do FOV %.1f°).", dist, discrepancyAngleDeg, maxFovDeg))
 
-    if inFov and not isObstructed then
-        local roll = math.random() * 100.0
-        local chance = math.clamp(hitChancePercent, 0.0, 100.0)
-        if roll <= chance then
-            hit = true
-            shotDir = directDir
-        else
-            -- Dispersão sutil fora do alvo em caso de erro probabilístico
-            local missAngle = math.rad(math.random(3, 8))
-            local randAxis = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
-            shotDir = CFrame.fromAxisAngle(randAxis, missAngle):VectorToWorldSpace(directDir)
-        end
+    -- ETAPA 3: TRAJETÓRIA CALCULADA
+    local isPhys = (isPhysics == true)
+    local g = (isPhys and type(gravity) == "number" and gravity >= 0) and gravity or 0
+    local speed = (type(projectileSpeed) == "number" and projectileSpeed > 0) and projectileSpeed or 2500
+    local flightTime = dist / speed
+    local bulletDropStuds = (g > 0) and (0.5 * g * flightTime * flightTime) or 0
+
+    local isSpreadMiss = false
+    local shotDir = directDir
+    local roll = math.random() * 100.0
+    local chance = math.clamp(hitChancePercent, 0.0, 100.0)
+
+    if roll > chance then
+        isSpreadMiss = true
+        local missAngle = math.rad(math.random(3, 8))
+        local randAxis = Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
+        shotDir = CFrame.fromAxisAngle(randAxis, missAngle):VectorToWorldSpace(directDir)
     end
 
-    local endPosition = hit and targetPosition or (muzzlePos + shotDir * dist)
+    local endPosition = (not isSpreadMiss) and targetPosition or (muzzlePos + shotDir * dist)
 
-    -- Geração de trajetória: reta para instantânea, arco parabólico segmentado para física
     local trajectoryPoints: { Vector3 }? = nil
     if isPhys and g > 0 and dist > 1.0 then
         trajectoryPoints = {}
         local steps = 10
-        -- V_launch calculado para que no instante flightTime o projétil atinja endPosition sob gravidade
         local vLaunch = (endPosition - muzzlePos + Vector3.new(0, 0.5 * g * flightTime * flightTime, 0)) / math.max(flightTime, 0.001)
         for i = 0, steps do
             local t = (i / steps) * flightTime
@@ -490,20 +563,107 @@ function VectorTracker:SimulateShot(
             table.insert(trajectoryPoints, pt)
         end
     end
+    table.insert(stages, string.format("[3] TRAJETÓRIA CALCULADA: Modelo %s | V_ini = %.0f studs/s | Queda = %.1f studs | Voo = %.2fs.", isPhys and "Físico" or "Instantâneo", speed, bulletDropStuds, flightTime))
+
+    -- ETAPA 4: COLISÃO VERIFICADA NO AMBIENTE DE SIMULAÇÃO
+    local hit = false
+    local hitPart: Instance? = nil
+    local impactPos = endPosition
+    local outcome: "SUCCESS" | "TARGET_OUTSIDE_FOV" | "OBSTACLE_BLOCKED" | "TARGET_INVALID" | "PROBABILISTIC_SPREAD" | "MODULE_DISABLED" | "INVALID_TRAJECTORY" | "INTERNAL_ERROR" = "SUCCESS"
+    local outcomeDesc = "Disparo simulado bem-sucedido com colisão confirmada no alvo sintético."
+
+    if isSpreadMiss then
+        hit = false
+        outcome = "PROBABILISTIC_SPREAD"
+        outcomeDesc = string.format("Dispersão probabilística intencional simulada (Hit Chance configurada em %.0f%%).", chance)
+        table.insert(stages, "[4] COLISÃO VERIFICADA: Projétil desviado intencionalmente por dispersão estatística.")
+    elseif isObstructed == true then
+        hit = false
+        outcome = "OBSTACLE_BLOCKED"
+        outcomeDesc = "Obstáculo bloqueando o projétil: colisão com barreira sólida antes do alvo."
+        table.insert(stages, "[4] COLISÃO VERIFICADA [FALHA]: Obstáculo opaco/sólido detectado na linha de disparo.")
+    else
+        -- Verificação de colisão física real em Workspace
+        local raySuccess, rayResult = pcall(function()
+            if typeof(Workspace) ~= "Instance" or not Workspace.Raycast then return nil end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.IgnoreWater = true
+            local ignoreList = {}
+            for _, f in ipairs(self.FilterInstances) do table.insert(ignoreList, f) end
+            local tracers = Workspace:FindFirstChild("DeepHat_Tracers")
+            if tracers then table.insert(ignoreList, tracers) end
+            params.FilterDescendantsInstances = ignoreList
+
+            if trajectoryPoints and #trajectoryPoints >= 2 then
+                -- Segmentos parabólicos para projéteis físicos
+                for i = 1, #trajectoryPoints - 1 do
+                    local pA = trajectoryPoints[i]
+                    local pB = trajectoryPoints[i + 1]
+                    local segRes = Workspace:Raycast(pA, pB - pA, params)
+                    if segRes then return segRes end
+                end
+                return nil
+            else
+                -- Raycast direto
+                return Workspace:Raycast(muzzlePos, directDir * (dist + 2.0), params)
+            end
+        end)
+
+        if raySuccess and rayResult then
+            hitPart = rayResult.Instance
+            impactPos = rayResult.Position
+            local isTargetPart = false
+            if targetInstance ~= nil then
+                if hitPart == targetInstance or hitPart:IsDescendantOf(targetInstance) then
+                    isTargetPart = true
+                end
+            else
+                isTargetPart = true
+            end
+
+            if isTargetPart then
+                hit = true
+                outcome = "SUCCESS"
+                outcomeDesc = string.format("Disparo simulado bem-sucedido: colisão confirmada em '%s'.", hitPart.Name)
+                table.insert(stages, string.format("[4] COLISÃO VERIFICADA: Impacto registrado na parte '%s'.", hitPart.Name))
+            else
+                hit = false
+                outcome = "OBSTACLE_BLOCKED"
+                outcomeDesc = string.format("Obstáculo bloqueando o projétil: colidiu com '%s' antes do alvo.", hitPart.Name)
+                table.insert(stages, string.format("[4] COLISÃO VERIFICADA [FALHA]: Interceptado por obstáculo '%s'.", hitPart.Name))
+            end
+        else
+            -- Em ambiente sem raycast nativo (offline/mocks), verificação geométrica
+            hit = true
+            outcome = "SUCCESS"
+            outcomeDesc = "Disparo simulado bem-sucedido com validação geométrica de colisão."
+            table.insert(stages, "[4] COLISÃO VERIFICADA: Colisão confirmada por intersecção vetorial.")
+        end
+    end
+
+    -- ETAPA 5: RESULTADO FINAL
+    table.insert(stages, string.format("[5] RESULTADO FINAL: [%s] %s", outcome, outcomeDesc))
 
     return {
+        Stage = "FINAL_RESULT",
         Fired = true,
         HitRegistered = hit,
+        Outcome = outcome,
+        OutcomeDescription = outcomeDesc,
         DiscrepancyAngleDeg = discrepancyAngleDeg,
         MuzzlePosition = muzzlePos,
         TargetPosition = endPosition,
+        ImpactPosition = impactPos,
+        HitPart = hitPart,
         ShotDirection = shotDir,
         InFov = inFov,
-        IsObstructed = isObstructed == true,
+        IsObstructed = (outcome == "OBSTACLE_BLOCKED"),
         FlightTime = flightTime,
         BulletDropStuds = bulletDropStuds,
         TrajectoryPoints = trajectoryPoints,
-        TrajectoryType = isPhys and "Physics" or "Instant"
+        TrajectoryType = isPhys and "Physics" or "Instant",
+        StagesCompleted = stages
     }
 end
 

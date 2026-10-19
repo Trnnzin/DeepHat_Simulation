@@ -74,8 +74,17 @@ check(repHealthy.Status == "HEALTHY", "DiagnosticAI: estado nominal retorna HEAL
 local repCrit = DiagnosticAI.AnalyzeSystemState({ angularVelocity = 700, mode = "AIMBOT", targetName = "Dummy1" })
 check(repCrit.Status == "CRITICAL" and repCrit.AffectedModule:find("VectorTracker") ~= nil, "DiagnosticAI: velocidade angular extrema retorna CRITICAL")
 
-local repShotMiss = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, InFov = false, DiscrepancyAngleDeg = 45 })
+local repShotMiss = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, InFov = false, DiscrepancyAngleDeg = 45, Outcome = "TARGET_OUTSIDE_FOV" })
 check(repShotMiss.Status == "WARNING" and repShotMiss.AffectedModule:find("SilentAim") ~= nil, "DiagnosticAI: tiro fora de FOV aponta SilentAim")
+
+local repWall = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, Outcome = "OBSTACLE_BLOCKED", FailureReason = "Obstaculo detectado" })
+check(repWall.Status == "WARNING" and repWall.AffectedModule:find("Raycast") ~= nil, "DiagnosticAI: obstáculo bloqueando aponta Raycast / Workspace")
+
+local repSpread = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, Outcome = "PROBABILISTIC_SPREAD" })
+check(repSpread.Status == "HEALTHY" and repSpread.RootCause:find("probabil") ~= nil, "DiagnosticAI: dispersão probabilística identificada nominalmente")
+
+local repSuccess = DiagnosticAI.AnalyzeSystemState(nil, nil, nil, { Fired = true, Outcome = "SUCCESS", Success = true, HitRegistered = true })
+check(repSuccess.Status == "HEALTHY" and repSuccess.Summary:find("nominal") ~= nil, "DiagnosticAI: disparo bem-sucedido retorna HEALTHY")
 
 local chatJitter = DiagnosticAI.QueryChatbot("Por que a mira está oscilando?")
 check(chatJitter.Answer:find("Suavização") ~= nil, "Chatbot: pergunta sobre oscilação sugere suavização")
