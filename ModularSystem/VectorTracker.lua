@@ -1,7 +1,8 @@
 --!strict
 -- VectorTracker.lua
--- Pilar 2: Motor de Rotação e Interpolação Vetorial (Smoothness & Vector Math)
--- CFrame.lookAt com Lerp contínuo dependente de DeltaTime e Prevenção de NaN via EPSILON
+-- Pilar 2: Motor de Rotação, Interpolação Vetorial e Cinemática Avançada
+-- CFrame.lookAt com Lerp contínuo independente de framerate (Exponential Decay),
+-- Proteção Epsilon (1e-4), Jitter Orgânico Perlin Noise e Cálculo Instantâneo de Velocidade Angular
 
 local Workspace = game:GetService("Workspace")
 
@@ -15,16 +16,20 @@ export type TrackingTelemetry = {
     Direction: Vector3,
     Distance: number,
     AngularErrorDeg: number,
+    AngularVelocityDeg: number,
     TargetCFrame: CFrame,
     SmoothedCFrame: CFrame,
-    IsObstructed: boolean
+    IsObstructed: boolean,
+    Mode: string
 }
 
 function VectorTracker.new(filterInstances: { Instance }?)
     local self = setmetatable({}, VectorTracker)
     self.CurrentCFrame = CFrame.identity
     self.PreviousLookVector = Vector3.zAxis
+    self.PreviousTime = os.clock()
     self.PreviousAngularVelocity = 0
+    self.NoiseSeed = math.random(1000, 9999)
     self.VelocityCache = setmetatable({}, { __mode = "k" }) :: { [Instance]: { pos: Vector3, time: number, vel: Vector3 } }
 
     local rayParams = RaycastParams.new()
@@ -76,22 +81,26 @@ function VectorTracker:ComputeLead(targetPos: Vector3, targetVel: Vector3, eyePo
     return targetPos + (targetVel * timeToHit)
 end
 
--- Cálculo de Rotação Suavizada (Lerp com DeltaTime e Guarda Epsilon)
+-- Cálculo de Rotação Suavizada (Lerp com DeltaTime, Guarda Epsilon, Aceleração Hermite e Jitter)
 function VectorTracker:ComputeSmoothRotation(
     currentCFrame: CFrame,
     targetPosition: Vector3,
     dt: number,
     smoothingFactor: number,
-    angularVelocityLimit: number?
-): (CFrame, number)
+    accelExponent: number?,
+    simulateJitter: boolean?,
+    intensity: number?
+): (CFrame, number, number)
     local originPos = currentCFrame.Position
     local displacement = (targetPosition - originPos)
     local distance = displacement.Magnitude
 
     -- PREVENÇÃO DE NaN: Aborta caso a distância seja menor que o limiar EPSILON
     if distance < EPSILON then
-        return currentCFrame, 0
+        return currentCFrame, 0, 0
     end
+
+    local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
 
     -- Normalização segura no R3: u = D / ||D||
     local unitDirection = displacement / distance
@@ -102,17 +111,66 @@ function VectorTracker:ComputeSmoothRotation(
     -- Matriz de Orientação Alvo via CFrame.lookAt
     local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
 
-    -- Interpolação Linear de Matriz de Rotação (Lerp) baseada em Alpha e DeltaTime
-    -- alpha_eff = 1 - e^(-k * dt) -> Taxa de rotação angular independente de FPS
-    local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
-    local baseAlpha = math.clamp(smoothingFactor or 0.15, 0.01, 1.0)
-    local k = (baseAlpha * 24.0)
+    -- Curva de aceleração Hermite Smoothstep com expoente configurável
+    local normErr = math.clamp(angularErrorDeg / 70.0, 0.0, 1.0)
+    local hermiteFactor = normErr * normErr * (3.0 - 2.0 * normErr)
+    local exponent = accelExponent or 1.25
+    hermiteFactor = math.pow(hermiteFactor, exponent)
+
+    -- Interpolação Linear de Matriz de Rotação (Exponential Decay independente de taxa de quadros)
+    local baseAlpha = math.clamp(smoothingFactor or 0.15, 0.005, 1.0)
+    local k = (baseAlpha * 26.0) * (0.35 + 0.65 * hermiteFactor)
     local dynamicAlpha = math.clamp(1.0 - math.exp(-k * safeDt), 0.001, 1.0)
 
     local smoothedCFrame = currentCFrame:Lerp(targetRotation, dynamicAlpha)
+
+    -- Injeção de Jitter Perlin Noise caso habilitado
+    if simulateJitter and intensity and intensity > 0 then
+        local now = os.clock()
+        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.3
+        if jitterFactor > 0.01 then
+            local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
+            local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
+            smoothedCFrame = smoothedCFrame * CFrame.Angles(math.rad(noiseX), math.rad(noiseY), 0)
+        end
+    end
+
+    -- Cálculo da velocidade angular instantânea em graus/segundo
+    local newLook = smoothedCFrame.LookVector
+    local deltaDot = math.clamp(self.PreviousLookVector:Dot(newLook), -1.0, 1.0)
+    local deltaAngleDeg = math.deg(math.acos(deltaDot))
+    local angularVelocity = deltaAngleDeg / safeDt
+
+    self.PreviousLookVector = newLook
     self.CurrentCFrame = smoothedCFrame
 
-    return smoothedCFrame, angularErrorDeg
+    return smoothedCFrame, angularErrorDeg, angularVelocity
+end
+
+-- Modo Snap Instantâneo (1 frame) para testes de Anomaly Detection
+function VectorTracker:ComputeSnapRotation(
+    currentCFrame: CFrame,
+    targetPosition: Vector3,
+    dt: number
+): (CFrame, number, number)
+    local originPos = currentCFrame.Position
+    local displacement = (targetPosition - originPos)
+    local distance = displacement.Magnitude
+
+    if distance < EPSILON then
+        return currentCFrame, 0, 0
+    end
+
+    local safeDt = math.clamp(dt or 0.0166, 0.0001, 0.1)
+    local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
+
+    local deltaDot = math.clamp(currentCFrame.LookVector:Dot(targetRotation.LookVector), -1.0, 1.0)
+    local angularVelocity = math.deg(math.acos(deltaDot)) / safeDt
+
+    self.PreviousLookVector = targetRotation.LookVector
+    self.CurrentCFrame = targetRotation
+
+    return targetRotation, 0, angularVelocity
 end
 
 return VectorTracker

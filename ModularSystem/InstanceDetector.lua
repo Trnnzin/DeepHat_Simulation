@@ -178,10 +178,10 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
     end
 
     -- 3. CollectionService Tags
-    local okCs, CollectionService = pcall(function() return game:GetService("CollectionService") end)
-    if okCs and CollectionService then
-        for _, tag in ipairs(self.KnownTags) do
-            for _, tagged in ipairs(CollectionService:GetTagged(tag)) do
+    for _, tag in ipairs(self.KnownTags) do
+        local okTagged, taggedList = pcall(function() return CollectionService:GetTagged(tag) end)
+        if okTagged and taggedList then
+            for _, tagged in ipairs(taggedList) do
                 if tagged:IsA("Model") or tagged:IsA("BasePart") then Ingest(tagged) end
             end
         end

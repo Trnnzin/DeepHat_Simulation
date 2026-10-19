@@ -1,28 +1,40 @@
-﻿===================================================================
-               DEEPHAT SIMULATION ENGINE - COMPLETO
+===================================================================
+               DEEPHAT SIMULATION SUITE v6.0 PRO - MANUAL
 ===================================================================
 
-Estrutura dos Arquivos na Pasta:
-1. EngineCore.lua        -> ModuleScript (Configuração de Perfis e Cálculo de Suspeita)
-2. BehaviorSimulator.lua -> ModuleScript (Geração de Telemetria de Movimento, Mira e Visão)
-3. MainTestRunner.lua    -> Script (Executor principal que roda o benchmark no console)
+ESTRUTURA DE DIRETÓRIOS E COMPONENTES:
+1. ModularSystem/
+   - SimConfig.lua                  -> ModuleScript (Estado Reativo)
+   - DashboardGUI.lua               -> ModuleScript (Interface 8 Abas + Watchdog)
+   - SimulationBootstrap.client.lua -> LocalScript (Orquestrador do Cliente)
+   - InstanceDetector.lua           -> ModuleScript (Detecção de Alvos)
+   - VectorTracker.lua              -> ModuleScript (Matemática Vetorial)
+   - VisualOverlayRenderer.lua       -> ModuleScript (Realce ESP)
+
+2. Testes e Benchmarks:
+   - MainTestRunner.lua             -> Script (Executar no ServerScriptService)
+   - StressTestBenchmark.lua        -> Script / Command Bar (1000 ciclos de estresse)
+   - FPS_Client_Tests/              -> Scripts de testes específicos de combate
 
 -------------------------------------------------------------------
 COMO EXECUTAR NO ROBLOX STUDIO:
 -------------------------------------------------------------------
-1. Abra seu jogo no Roblox Studio.
-2. Na janela Explorer (lado direito):
-   - Vá até 'ServerScriptService'.
-   - Clique com o botão direito > Insert Object > 'Folder' (renomeie para 'DeepHat').
-   
-3. Dentro da pasta 'DeepHat':
-   - Crie um ModuleScript com o nome: EngineCore
-     -> Cole o conteúdo de EngineCore.lua
-   - Crie um ModuleScript com o nome: BehaviorSimulator
-     -> Cole o conteúdo de BehaviorSimulator.lua
-   - Crie um Script normal com o nome: MainTestRunner
-     -> Cole o conteúdo de MainTestRunner.lua
+Opção A (Sistema Modular Completo - Cliente):
+1. Copie a pasta 'ModularSystem' para:
+   StarterPlayer -> StarterPlayerScripts (no Explorer do Roblox Studio).
+2. Pressione Play (F5).
+3. A interface abrirá no centro da tela.
+   - Pressione [HOME] ou [RightShift] para abrir/fechar.
+   - Navegue pelas 8 abas na barra lateral esquerda.
+   - Observe o badge dinâmico do Watchdog na barra superior.
+   - Segure o Botão Direito do Mouse (RMB) para focar no alvo detectado.
 
-4. Aperte 'Play' (F5) ou 'Run' (F8) no Roblox Studio e abra a janela 'Output' (Exibir > Saída).
-   Você verá as iterações rodando e o resumo final comparando as médias de suspeita do jogador normal vs agressivo!
+Opção B (Testes Unitários no Console):
+1. Crie um Script normal dentro de ServerScriptService.
+2. Cole o conteúdo de 'MainTestRunner.lua'.
+3. Pressione Run (F8) e abra o Output (Exibir -> Saída).
+4. Verifique a lista de validações de SimConfig, VectorTracker e Heurísticas de Anomalia.
+
+Opção C (Arquivo Único Standalone):
+1. Execute 'DeepHat_Standalone.lua' via Command Bar ou executor local.
 ===================================================================

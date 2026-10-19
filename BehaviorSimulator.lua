@@ -1,40 +1,74 @@
-﻿local Engine = require(script.Parent.EngineCore) -- Importa a base (ou require(EngineCore))
+--!strict
+-- =========================================================================
+-- BehaviorSimulator.lua
+-- Gerador Controlado de Telemetria Cinemática para Testes de Anti-Cheat
+-- =========================================================================
+
+local Engine = require(script.Parent.EngineCore)
 
 local Simulator = {}
 
--- Simula o movimento do jogador (Velocidade e Direção)
-function Simulator:SimulateMovement(profile)
-    local baseSpeed = 16
+export type SimulationProfile = {
+    SpeedMult: number,
+    AimSmooth: number,
+    SnapChance: number,
+    WalltrackProb: number,
+    Precision: number,
+    MaxExpectedAngVel: number?
+}
+
+-- Simula cinemática de movimento linear
+function Simulator:SimulateMovement(profile: SimulationProfile)
+    local baseSpeed = 16.0
     local targetSpeed = baseSpeed * profile.SpeedMult
-    
-    -- Simula uma aceleração súbita ou constante
-    local currentSpeed = targetSpeed + math.random(-2, 2)
-    
+    local noise = (math.random() * 4.0 - 2.0)
+    local currentSpeed = math.max(targetSpeed + noise, 0)
+
     return {
         velocity = currentSpeed,
         timestamp = os.clock()
     }
 end
 
--- Simula a mira (Aimbot vs Smooth)
-function Simulator:SimulateAim(profile)
-    local isSnap = math.random() < profile.SnapChance
-    local angularVel = isSnap and math.random(60, 100) or math.random(5, 15)
-    
+-- Simula cinemática de rotação angular da mira
+function Simulator:SimulateAim(profile: SimulationProfile, dt: number?)
+    local safeDt = dt or 0.0166
+    local isSnap = (math.random() < profile.SnapChance)
+
+    local deltaAngle = 0
+    local angularVel = 0
+
+    if isSnap then
+        -- Rotação instantânea de grande amplitude (40° a 110° em 1 frame)
+        deltaAngle = math.random(40, 110)
+        angularVel = deltaAngle / safeDt
+    else
+        -- Rotação suave controlada humana (2° a 8° por frame, interpolada)
+        deltaAngle = math.random(2, 8) + (math.random() * 0.5)
+        angularVel = deltaAngle / safeDt
+    end
+
     return {
         isSnap = isSnap,
+        deltaAngleDeg = deltaAngle,
         angularVel = angularVel,
         timestamp = os.clock()
     }
 end
 
--- Simula a detecção de parede (Wallhack)
-function Simulator:SimulateVision(profile)
-    -- Simula se o jogador está acompanhando um alvo atrás de uma parede
-    local isWallTracking = math.random() < profile.WalltrackProb
-    
+-- Simula linha de visão e persistência de rastreamento através de obstáculos
+function Simulator:SimulateVision(profile: SimulationProfile, currentOccludedStreak: number?)
+    local isWallTracking = (math.random() < profile.WalltrackProb)
+    local streak = currentOccludedStreak or 0
+    if isWallTracking then
+        streak = streak + 1
+    else
+        streak = 0
+    end
+
     return {
         isWallTracking = isWallTracking,
+        consecutiveOccluded = streak,
         timestamp = os.clock()
     }
 end

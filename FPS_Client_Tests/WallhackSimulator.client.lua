@@ -1,4 +1,4 @@
-﻿-- DeepHat FPS Wallhack Behavior Simulator (Para testes de pre-aim e visada através de paredes)
+-- DeepHat FPS Wallhack Behavior Simulator (Para testes de pre-aim e visada através de paredes)
 local Camera = workspace.CurrentCamera
 
 local Settings = {
@@ -15,7 +15,7 @@ local function CheckLineOfSight(targetPos)
     if game.Players.LocalPlayer.Character then
         raycastParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character}
     end
-    raycastParams.FilterType = Enum.RaycastFilterMode.Exclude
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
     local result = workspace:Raycast(rayOrigin, rayDirection, raycastParams)
     return result == nil -- true se não houver colisão no trajeto

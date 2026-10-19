@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- LineOfSightSimulator.lua
 -- Módulo 2: Simulação de Visada Óptica e Oclusão Geométrica
 
@@ -16,9 +16,8 @@ export type RayTelemetry = {
 function LineOfSightSimulator.new(filterInstances: {Instance}?)
     local self = setmetatable({}, LineOfSightSimulator)
     
-    -- Reutilização de RaycastParams para otimização de performance (zero overhead de alocação)
     local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterMode.Exclude
+    params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = filterInstances or {}
     params.IgnoreWater = true
     
