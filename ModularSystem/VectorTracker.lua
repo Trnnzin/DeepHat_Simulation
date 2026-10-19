@@ -215,37 +215,31 @@ function VectorTracker:ComputeSmoothRotation(
     local rawDt = (type(dt) == "number" and dt == dt and dt > 0) and dt or 0.0166
     local safeDt = math.clamp(rawDt, 0.0001, 0.1)
 
-    -- Matriz de Orientação Alvo via CFrame.lookAt
-    local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
-    local rawCamRot = currentCFrame.Rotation
+    -- Extração robusta de Pitch e Yaw atuais a partir do LookVector da câmera
+    -- Roll é fixado estritamente em 0 para impedir giros contínuos e desorientação 3D
+    local curLook = currentCFrame.LookVector
+    local curPitch = math.asin(math.clamp(curLook.Y, -1.0, 1.0))
+    local curYaw = math.atan2(-curLook.X, -curLook.Z)
 
-    -- Determina rotação base: se o tracker estiver ativo e já possuir rotação acumulada,
-    -- avança a partir do estado acumulado e incorpora qualquer delta de rotação do mouse do usuário
-    local startRotation: CFrame
-    if self.TrackingActive and self.CurrentRotation then
-        local userDelta = CFrame.identity
-        if self.LastRawCamRotation then
-            userDelta = self.LastRawCamRotation:Inverse() * rawCamRot
-        end
-        startRotation = self.CurrentRotation * userDelta
-    else
-        startRotation = rawCamRot
-        self.TrackingActive = true
+    -- Direção alvo para o ponto 3D do alvo
+    local unitDir = displacement / distance
+    local tgtPitch = math.asin(math.clamp(unitDir.Y, -1.0, 1.0))
+    local tgtYaw = math.atan2(-unitDir.X, -unitDir.Z)
+
+    -- Cálculo do menor arco angular para Yaw e Pitch (envoltória periódica [-pi, pi])
+    local function ShortestAngle(tgt: number, cur: number): number
+        return (tgt - cur + math.pi) % (2.0 * math.pi) - math.pi
     end
-    self.LastRawCamRotation = rawCamRot
+    local deltaPitch = ShortestAngle(tgtPitch, curPitch)
+    local deltaYaw = ShortestAngle(tgtYaw, curYaw)
+    local totalAngularErrRad = math.sqrt(deltaPitch * deltaPitch + deltaYaw * deltaYaw)
+    local angularErrorDeg = math.deg(totalAngularErrRad)
 
-    -- Normalização e cálculo angular relativo ao startRotation
-    local forward = startRotation.LookVector
-    local unitDirection = displacement / distance
-    local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
-    local angularErrorDeg = math.deg(math.acos(dot))
-
-    -- Se o erro for insignificante (< 0.04°), mantém a rotação estabilizada sem micro-trepidações
+    -- Zona morta de estabilidade: se o erro for microscópico (< 0.04°), mantém a câmera imóvel sem trepidações
     if angularErrorDeg < 0.04 then
-        local safeCFrame = CFrame.new(originPos) * startRotation
-        self.CurrentRotation = startRotation
-        self.CurrentCFrame = safeCFrame
-        return safeCFrame, angularErrorDeg, 0
+        self.CurrentCFrame = currentCFrame
+        self.TrackingActive = true
+        return currentCFrame, angularErrorDeg, 0
     end
 
     -- Curva de aceleração Hermite Smoothstep com expoente configurável
@@ -254,7 +248,7 @@ function VectorTracker:ComputeSmoothRotation(
     local exponent = accelExponent or 1.25
     hermiteFactor = math.pow(hermiteFactor, exponent)
 
-    -- Mapeamento semântico correto: Menor Smoothing = Maior velocidade de resposta
+    -- Mapeamento semântico: Menor Smoothing = Maior velocidade de resposta
     local safeSmooth = math.clamp(smoothingFactor or 0.15, 0.01, 1.0)
     local responseRate = 1.0 / safeSmooth
     local k = responseRate * (0.65 + 0.35 * hermiteFactor)
@@ -268,22 +262,23 @@ function VectorTracker:ComputeSmoothRotation(
 
     -- Aplica clamp de velocidade angular máxima se requisitado
     if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
-        local maxDegThisFrame = maxAngularVel * safeDt
-        if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
-            dynamicAlpha = math.clamp(maxDegThisFrame / math.max(angularErrorDeg, 0.001), 0.001, 1.0)
+        local maxRadThisFrame = math.rad(maxAngularVel) * safeDt
+        if (totalAngularErrRad * dynamicAlpha) > maxRadThisFrame then
+            dynamicAlpha = math.clamp(maxRadThisFrame / math.max(totalAngularErrRad, 0.0001), 0.001, 1.0)
         end
     end
 
-    -- Interpolação orientada pura (Lerp esférico da rotação)
-    local nextRotation = startRotation:Lerp(targetRotation.Rotation, dynamicAlpha)
-    self.CurrentRotation = nextRotation
+    -- Atualização determinística em espaço Euler YXZ (Sem acúmulo de matrizes nem Roll)
+    local nextPitch = curPitch + deltaPitch * dynamicAlpha
+    nextPitch = math.clamp(nextPitch, -math.rad(89.5), math.rad(89.5))
+    local nextYaw = curYaw + deltaYaw * dynamicAlpha
 
-    local smoothedCFrame = CFrame.new(originPos) * nextRotation
+    local smoothedCFrame = CFrame.new(originPos) * CFrame.fromEulerAnglesYXZ(nextPitch, nextYaw, 0)
 
     -- Injeção de Jitter Perlin Noise caso habilitado
     if simulateJitter and intensity and intensity > 0 then
         local now = os.clock()
-        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.20
+        local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.15
         if jitterFactor > 0.005 then
             local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
             local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -299,6 +294,7 @@ function VectorTracker:ComputeSmoothRotation(
 
     self.PreviousLookVector = newLook
     self.CurrentCFrame = smoothedCFrame
+    self.TrackingActive = true
 
     return smoothedCFrame, angularErrorDeg, angularVelocity
 end
@@ -447,6 +443,10 @@ function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color
             container = newFolder
         end
 
+        local tracerColor = color or Color3.fromRGB(255, 45, 60)
+        local life = duration or 0.22
+
+        -- 1. Feixe de Traçador (Cilindro/Viga Neon)
         local part = Instance.new("Part")
         part.Name = "DeepHat_SilentAimTracer"
         part.Anchored = true
@@ -454,13 +454,28 @@ function VectorTracker:DrawTracerBeam(origin: Vector3, targetPos: Vector3, color
         part.CanTouch = false
         part.CanQuery = false
         part.Material = Enum.Material.Neon
-        part.Color = color or Color3.fromRGB(255, 45, 60)
-        part.Transparency = 0.25
-        part.Size = Vector3.new(0.08, 0.08, dist)
+        part.Color = tracerColor
+        part.Transparency = 0.10
+        part.Size = Vector3.new(0.16, 0.16, dist)
         part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
         part.Parent = container
+        Debris:AddItem(part, life)
 
-        Debris:AddItem(part, duration or 0.12)
+        -- 2. Marcador de Impacto no Ponto de Destino
+        local impact = Instance.new("Part")
+        impact.Name = "DeepHat_ImpactMarker"
+        impact.Shape = Enum.PartType.Ball
+        impact.Anchored = true
+        impact.CanCollide = false
+        impact.CanTouch = false
+        impact.CanQuery = false
+        impact.Material = Enum.Material.Neon
+        impact.Color = tracerColor
+        impact.Transparency = 0.15
+        impact.Size = Vector3.new(0.70, 0.70, 0.70)
+        impact.Position = targetPos
+        impact.Parent = container
+        Debris:AddItem(impact, life + 0.08)
     end)
 end
 

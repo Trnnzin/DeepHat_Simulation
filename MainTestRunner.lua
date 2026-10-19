@@ -467,6 +467,96 @@ else
     Skip("Ciclo real de câmera (convergência, Release, restauração)", "exige cliente em Play no Studio")
 end
 
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 19] ROTAÇÃO EULER YXZ (ROLL ZERO E ESTABILIDADE CONTRA RUNAWAY SPIN)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 19] Validando Estabilidade Euler YXZ (Roll Zero e Ausência de Runaway Spin)...")
+local eulerTracker = VectorTracker.new({})
+local camTestOrigin = CFrame.new(Vector3.new(0, 5, 0), Vector3.new(0, 5, -10))
+local dummyTargetPos = Vector3.new(20, 10, -50)
+
+-- Simula loop fechado de 60 quadros alimentando a saída como entrada
+local currentCam = camTestOrigin
+for frame = 1, 60 do
+    local nextCf, errDeg, angVel = eulerTracker:ComputeSmoothRotation(
+        currentCam,
+        dummyTargetPos,
+        0.0166,
+        0.15,
+        1.25,
+        false,
+        0,
+        360.0,
+        true
+    )
+    currentCam = nextCf
+
+    -- Validação matemática: o Roll no espaço Euler YXZ deve ser estritamente zero
+    local _, _, roll = currentCam:ToEulerAnglesYXZ()
+    if math.abs(roll) > 1e-4 then
+        Assert(false, string.format("Roll detectado no frame %d: %.5f rad (esperado zero)", frame, roll))
+        break
+    end
+end
+Assert(true, "Roll estritamente 0 mantido durante todos os quadros (sem acúmulo de inclinação lateral)")
+local finalErr = (dummyTargetPos - currentCam.Position).Unit:Dot(currentCam.LookVector)
+Assert(finalErr > 0.99, "Câmera convergiu estavelmente em direção ao manequim sem oscilação infinita")
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 20] PREVENÇÃO DA TELA ESVERDEADA (ISOLAMENTO DO HIGHLIGHT)
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 20] Validando Isolamento do Realce (Prevenção de Tela Esverdeada)...")
+local isolationDetector = InstanceDetector.new(0.1)
+local isolationRenderer = VisualOverlayRenderer.new()
+
+-- 1. Cria um modelo de cenário que NÃO deve ser aceito como alvo
+local fakeBuilding = Instance.new("Model")
+fakeBuilding.Name = "ArenaBuilding"
+fakeBuilding.Parent = game:GetService("Workspace")
+local fakeWall = Instance.new("Part")
+fakeWall.Name = "Wall"
+fakeWall.Size = Vector3.new(50, 20, 2)
+fakeWall.Parent = fakeBuilding
+Assert(isolationDetector:IsValidTarget(fakeBuilding) == false, "Estrutura de mapa 'ArenaBuilding' rejeitada pelo IsValidTarget")
+
+-- 2. Cria manequim sintético válido
+local dummyTarget = Instance.new("Model")
+dummyTarget.Name = "TestMannequin"
+local dummyHead = Instance.new("Part")
+dummyHead.Name = "Head"
+dummyHead.Parent = dummyTarget
+local dummyHum = Instance.new("Humanoid")
+dummyHum.Parent = dummyTarget
+dummyTarget.Parent = game:GetService("Workspace")
+Assert(isolationDetector:IsValidTarget(dummyTarget) == true, "Manequim sintético 'TestMannequin' aceito como candidato válido")
+
+-- 3. Aplica realce e verifica anexo direto (Parent == target)
+isolationRenderer:UpdateTargetHighlight(dummyTarget, false, true)
+local appliedHl = isolationRenderer.ActiveHighlights[dummyTarget]
+Assert(appliedHl ~= nil, "Highlight instanciado para o manequim sintético")
+Assert(appliedHl.Parent == dummyTarget, "Highlight anexado diretamente ao modelo do manequim (não ao Workspace global)")
+isolationRenderer:ClearAll()
+Assert(next(isolationRenderer.ActiveHighlights) == nil, "Limpeza do renderer destruiu com segurança todos os realces")
+
+dummyTarget:Destroy()
+fakeBuilding:Destroy()
+
+-- -------------------------------------------------------------------------
+-- [CRITÉRIO 21] SIMULAÇÃO DE SILENT AIM DESACOPLADA COM TRAÇADOR E IMPACTO
+-- -------------------------------------------------------------------------
+print("\n[CRITÉRIO 21] Validando Simulação de Disparo Desacoplado (Silent Aim)...")
+local silentTracker = VectorTracker.new({})
+local camPos = CFrame.new(Vector3.new(0, 5, 0), Vector3.new(0, 5, -10))
+local decoupledTarget = Vector3.new(10, 5, -30) -- ~18° desacoplado da mira central
+
+local inFov, shotDir, discAngle = silentTracker:ComputeSilentAimVector(camPos, decoupledTarget, 35.0)
+Assert(inFov == true, "Alvo dentro do FOV desacoplado (35°) avaliado como inFov")
+Assert(math.abs(discAngle - 18.4) < 1.0, string.format("Ângulo de desacoplamento medido com precisão (%.1f°)", discAngle))
+
+local shotResult = silentTracker:SimulateShot(camPos, decoupledTarget, 35.0, 100.0, false, nil)
+Assert(shotResult.Fired == true and shotResult.HitRegistered == true, "Simulação de disparo registrou acerto sintético determinístico (100%)")
+Assert((shotResult.TargetPosition - decoupledTarget).Magnitude < 0.01, "Ponto de impacto coincide com o alvo sintético")
+
 -- [18] DESEMPENHO EM VÁRIOS TAMANHOS --------------------------------------
 print("\n[CRITÉRIO 18] Desempenho da seleção real (pool parentado)...")
 local perfDet = InstanceDetector.new(0.1)

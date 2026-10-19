@@ -802,8 +802,8 @@ do
         self.LastScanTime = 0
         self.CandidatePool = {} :: { Instance }
         self.LocalPlayer = Players.LocalPlayer
-        self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
-        self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
+        self.KnownTags = { "NPC", "Enemy", "Target", "Bot", "Dummy", "SyntheticTarget", "TestDummy", "Hitbox" }
+        self.SearchFolders = { "NPCs", "Enemies", "Bots", "Dummies", "Targets", "DeepHat_Targets", "TestDummies", "SyntheticTargets" }
         self.LockedTarget = nil :: Instance?
         self.LockExpiry = 0
         return self
@@ -821,12 +821,14 @@ do
             return false
         end
 
-        -- Ignora explicitamente geometrias estáticas do mundo
+        -- Ignora explicitamente geometrias estáticas do mundo e estruturas de mapa
         if objeto:IsA("Terrain") or objeto.Name == "Terrain" or objeto.Name == "Baseplate" then
             return false
         end
         local lowerName = objeto.Name:lower()
-        if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" then
+        if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" or lowerName:find("baseplate")
+            or lowerName:find("spawn") or lowerName:find("lobby") or lowerName:find("building") or lowerName:find("room")
+            or lowerName:find("road") or lowerName:find("floor") or lowerName:find("wall") or lowerName:find("door") then
             return false
         end
 
@@ -842,6 +844,14 @@ do
         local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
         if hum and hum.Health <= 0 then
             return false
+        end
+
+        -- Modelos devem conter partes físicas válidas para serem alvos sintéticos
+        if objeto:IsA("Model") then
+            local hasPart = objeto.PrimaryPart or objeto:FindFirstChildWhichIsA("BasePart", true)
+            if not hasPart then
+                return false
+            end
         end
 
         -- Verificação de equipe para Jogadores
@@ -979,23 +989,32 @@ do
             end
         end
 
-        -- 4. Filhos diretos e subpastas da raiz do Workspace (Dummies, Rigs e Modelos de Teste)
+        -- 4. Filhos da raiz do Workspace (Apenas Dummies, Rigs e Modelos de Teste Sintéticos Autorizados)
         for _, child in ipairs(Workspace:GetChildren()) do
             if child:IsA("Folder") then
-                for _, grandChild in ipairs(child:GetChildren()) do
-                    if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
-                        Ingest(grandChild)
+                -- Pastas da raiz são varridas apenas se forem pastas de teste identificadas
+                local lowerFolderName = child.Name:lower()
+                if lowerFolderName:find("dummy") or lowerFolderName:find("target") or lowerFolderName:find("npc") or lowerFolderName:find("bot") or lowerFolderName:find("test") then
+                    for _, grandChild in ipairs(child:GetChildren()) do
+                        if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
+                            Ingest(grandChild)
+                        end
                     end
                 end
             elseif child:IsA("Model") then
                 local hasHum = child:FindFirstChildOfClass("Humanoid")
                 local name = child.Name:lower()
-                if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") then
+                -- Modelos sintéticos autorizados: possuem nomenclatura explícita de teste/NPC ou partes de manequim padrão
+                local hasTestName = name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") or name:find("mannequin") or name:find("synthetic")
+                local hasCharParts = child:FindFirstChild("Head") and (child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("Torso") or child:FindFirstChild("UpperTorso"))
+                if hasHum and (hasTestName or hasCharParts) then
+                    Ingest(child)
+                elseif hasTestName then
                     Ingest(child)
                 end
             elseif child:IsA("BasePart") and child.Parent == Workspace then
                 local name = child.Name:lower()
-                if name:find("target") or name:find("dummy") or name:find("hitbox") then
+                if name:find("target") or name:find("dummy") or name:find("hitbox") or name:find("synthetic") then
                     Ingest(child)
                 end
             end
@@ -1313,37 +1332,31 @@ do
         local rawDt = (type(dt) == "number" and dt == dt and dt > 0) and dt or 0.0166
         local safeDt = math.clamp(rawDt, 0.0001, 0.1)
 
-        -- Matriz de Orientação Alvo via CFrame.lookAt
-        local targetRotation = CFrame.lookAt(originPos, targetPosition, Vector3.yAxis)
-        local rawCamRot = currentCFrame.Rotation
+        -- Extração robusta de Pitch e Yaw atuais a partir do LookVector da câmera
+        -- Roll é fixado estritamente em 0 para impedir giros contínuos e desorientação 3D
+        local curLook = currentCFrame.LookVector
+        local curPitch = math.asin(math.clamp(curLook.Y, -1.0, 1.0))
+        local curYaw = math.atan2(-curLook.X, -curLook.Z)
 
-        -- Determina rotação base: se o tracker estiver ativo e já possuir rotação acumulada,
-        -- avança a partir do estado acumulado e incorpora qualquer delta de rotação do mouse do usuário
-        local startRotation: CFrame
-        if self.TrackingActive and self.CurrentRotation then
-            local userDelta = CFrame.identity
-            if self.LastRawCamRotation then
-                userDelta = self.LastRawCamRotation:Inverse() * rawCamRot
-            end
-            startRotation = self.CurrentRotation * userDelta
-        else
-            startRotation = rawCamRot
-            self.TrackingActive = true
+        -- Direção alvo para o ponto 3D do alvo
+        local unitDir = displacement / distance
+        local tgtPitch = math.asin(math.clamp(unitDir.Y, -1.0, 1.0))
+        local tgtYaw = math.atan2(-unitDir.X, -unitDir.Z)
+
+        -- Cálculo do menor arco angular para Yaw e Pitch (envoltória periódica [-pi, pi])
+        local function ShortestAngle(tgt: number, cur: number): number
+            return (tgt - cur + math.pi) % (2.0 * math.pi) - math.pi
         end
-        self.LastRawCamRotation = rawCamRot
+        local deltaPitch = ShortestAngle(tgtPitch, curPitch)
+        local deltaYaw = ShortestAngle(tgtYaw, curYaw)
+        local totalAngularErrRad = math.sqrt(deltaPitch * deltaPitch + deltaYaw * deltaYaw)
+        local angularErrorDeg = math.deg(totalAngularErrRad)
 
-        -- Normalização e cálculo angular relativo ao startRotation
-        local forward = startRotation.LookVector
-        local unitDirection = displacement / distance
-        local dot = math.clamp(forward:Dot(unitDirection), -1.0, 1.0)
-        local angularErrorDeg = math.deg(math.acos(dot))
-
-        -- Se o erro for insignificante (< 0.04°), mantém a rotação estabilizada sem micro-trepidações
+        -- Zona morta de estabilidade: se o erro for microscópico (< 0.04°), mantém a câmera imóvel sem trepidações
         if angularErrorDeg < 0.04 then
-            local safeCFrame = CFrame.new(originPos) * startRotation
-            self.CurrentRotation = startRotation
-            self.CurrentCFrame = safeCFrame
-            return safeCFrame, angularErrorDeg, 0
+            self.CurrentCFrame = currentCFrame
+            self.TrackingActive = true
+            return currentCFrame, angularErrorDeg, 0
         end
 
         -- Curva de aceleração Hermite Smoothstep com expoente configurável
@@ -1352,7 +1365,7 @@ do
         local exponent = accelExponent or 1.25
         hermiteFactor = math.pow(hermiteFactor, exponent)
 
-        -- Mapeamento semântico correto: Menor Smoothing = Maior velocidade de resposta
+        -- Mapeamento semântico: Menor Smoothing = Maior velocidade de resposta
         local safeSmooth = math.clamp(smoothingFactor or 0.15, 0.01, 1.0)
         local responseRate = 1.0 / safeSmooth
         local k = responseRate * (0.65 + 0.35 * hermiteFactor)
@@ -1366,22 +1379,23 @@ do
 
         -- Aplica clamp de velocidade angular máxima se requisitado
         if clampMaxVel and maxAngularVel and maxAngularVel > 0 then
-            local maxDegThisFrame = maxAngularVel * safeDt
-            if (angularErrorDeg * dynamicAlpha) > maxDegThisFrame then
-                dynamicAlpha = math.clamp(maxDegThisFrame / math.max(angularErrorDeg, 0.001), 0.001, 1.0)
+            local maxRadThisFrame = math.rad(maxAngularVel) * safeDt
+            if (totalAngularErrRad * dynamicAlpha) > maxRadThisFrame then
+                dynamicAlpha = math.clamp(maxRadThisFrame / math.max(totalAngularErrRad, 0.0001), 0.001, 1.0)
             end
         end
 
-        -- Interpolação orientada pura (Lerp esférico da rotação)
-        local nextRotation = startRotation:Lerp(targetRotation.Rotation, dynamicAlpha)
-        self.CurrentRotation = nextRotation
+        -- Atualização determinística em espaço Euler YXZ (Sem acúmulo de matrizes nem Roll)
+        local nextPitch = curPitch + deltaPitch * dynamicAlpha
+        nextPitch = math.clamp(nextPitch, -math.rad(89.5), math.rad(89.5))
+        local nextYaw = curYaw + deltaYaw * dynamicAlpha
 
-        local smoothedCFrame = CFrame.new(originPos) * nextRotation
+        local smoothedCFrame = CFrame.new(originPos) * CFrame.fromEulerAnglesYXZ(nextPitch, nextYaw, 0)
 
         -- Injeção de Jitter Perlin Noise caso habilitado
         if simulateJitter and intensity and intensity > 0 then
             local now = os.clock()
-            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.20
+            local jitterFactor = (intensity / 100.0) * math.clamp(angularErrorDeg / 15.0, 0.0, 1.0) * 0.15
             if jitterFactor > 0.005 then
                 local noiseX = math.noise(now * 4.0, self.NoiseSeed, 0.5) * jitterFactor
                 local noiseY = math.noise(now * 4.0, self.NoiseSeed + 50, 0.5) * jitterFactor
@@ -1397,6 +1411,7 @@ do
 
         self.PreviousLookVector = newLook
         self.CurrentCFrame = smoothedCFrame
+        self.TrackingActive = true
 
         return smoothedCFrame, angularErrorDeg, angularVelocity
     end
@@ -1545,6 +1560,10 @@ do
                 container = newFolder
             end
 
+            local tracerColor = color or Color3.fromRGB(255, 45, 60)
+            local life = duration or 0.22
+
+            -- 1. Feixe de Traçador (Cilindro/Viga Neon)
             local part = Instance.new("Part")
             part.Name = "DeepHat_SilentAimTracer"
             part.Anchored = true
@@ -1552,13 +1571,28 @@ do
             part.CanTouch = false
             part.CanQuery = false
             part.Material = Enum.Material.Neon
-            part.Color = color or Color3.fromRGB(255, 45, 60)
-            part.Transparency = 0.25
-            part.Size = Vector3.new(0.08, 0.08, dist)
+            part.Color = tracerColor
+            part.Transparency = 0.10
+            part.Size = Vector3.new(0.16, 0.16, dist)
             part.CFrame = CFrame.lookAt(origin, targetPos) * CFrame.new(0, 0, -dist / 2)
             part.Parent = container
+            Debris:AddItem(part, life)
 
-            Debris:AddItem(part, duration or 0.12)
+            -- 2. Marcador de Impacto no Ponto de Destino
+            local impact = Instance.new("Part")
+            impact.Name = "DeepHat_ImpactMarker"
+            impact.Shape = Enum.PartType.Ball
+            impact.Anchored = true
+            impact.CanCollide = false
+            impact.CanTouch = false
+            impact.CanQuery = false
+            impact.Material = Enum.Material.Neon
+            impact.Color = tracerColor
+            impact.Transparency = 0.15
+            impact.Size = Vector3.new(0.70, 0.70, 0.70)
+            impact.Position = targetPos
+            impact.Parent = container
+            Debris:AddItem(impact, life + 0.08)
         end)
     end
 end
@@ -1634,11 +1668,14 @@ do
 
             local ok, newHl = pcall(function()
                 local inst = Instance.new("Highlight")
-                inst.Name = "HL_" .. target.Name
+                inst.Name = "DeepHat_HL_" .. target.Name
                 inst.Adornee = target
                 inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
                 inst.Enabled = true
-                inst.Parent = self.Container
+                -- FIX BUG 3: Anexa diretamente à entidade alvo.
+                -- Impede categoricamente que um Highlight sem Adornee ou órfão tome como alvo o Workspace ou a tela inteira.
+                local safeParent = (target:IsA("Model") or target:IsA("BasePart")) and target or self.Container
+                inst.Parent = safeParent
                 return inst
             end)
 
@@ -2682,6 +2719,54 @@ do
         CreateSliderField(pageCamera, "Frequência de Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5)
         CreateSliderField(pageCamera, "Raio Máximo de Atuação (studs)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
 
+        -- Seção de Silent Aim (Disparo Desacoplado da Câmera)
+        local silentCamHeader = Instance.new("TextLabel")
+        silentCamHeader.Size = UDim2.new(1, 0, 0, 24)
+        silentCamHeader.BackgroundTransparency = 1
+        silentCamHeader.Font = Enum.Font.GothamBold
+        silentCamHeader.TextSize = 11
+        silentCamHeader.TextColor3 = THEME.ACCENT_RED
+        silentCamHeader.TextXAlignment = Enum.TextXAlignment.Left
+        silentCamHeader.Text = "SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO DA CÂMERA)"
+        silentCamHeader.Parent = pageCamera
+
+        CreateToggleField(pageCamera, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
+        CreateSliderField(pageCamera, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1)
+        CreateSliderField(pageCamera, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5)
+        CreateToggleField(pageCamera, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
+
+        -- Card de Telemetria de Silent Aim
+        local silentCard = Instance.new("Frame")
+        silentCard.Size = UDim2.new(1, 0, 0, 36)
+        silentCard.BackgroundColor3 = THEME.BG_INPUT
+        silentCard.Parent = pageCamera
+        AddCorner(silentCard, 6)
+        AddStroke(silentCard, THEME.BORDER, 1)
+
+        local sLbl1 = Instance.new("TextLabel")
+        sLbl1.Size = UDim2.new(0.5, -10, 1, 0)
+        sLbl1.Position = UDim2.new(0, 10, 0, 0)
+        sLbl1.BackgroundTransparency = 1
+        sLbl1.Font = Enum.Font.GothamMedium
+        sLbl1.TextSize = 10
+        sLbl1.TextColor3 = THEME.TEXT_MUTED
+        sLbl1.TextXAlignment = Enum.TextXAlignment.Left
+        sLbl1.Text = "Silent Aim: DESATIVADO"
+        sLbl1.Parent = silentCard
+        TelemetryLabels["SilentAimStatus"] = sLbl1
+
+        local sLbl2 = Instance.new("TextLabel")
+        sLbl2.Size = UDim2.new(0.5, -10, 1, 0)
+        sLbl2.Position = UDim2.new(0.5, 0, 0, 0)
+        sLbl2.BackgroundTransparency = 1
+        sLbl2.Font = Enum.Font.GothamMedium
+        sLbl2.TextSize = 10
+        sLbl2.TextColor3 = THEME.TEXT_MUTED
+        sLbl2.TextXAlignment = Enum.TextXAlignment.Right
+        sLbl2.Text = "Último Disparo: NENHUM"
+        sLbl2.Parent = silentCard
+        TelemetryLabels["LastShotStatus"] = sLbl2
+
         -- =========================================================================
         -- [ABA 3] SIMULAÇÃO & COMPORTAMENTO
         -- =========================================================================
@@ -3416,7 +3501,10 @@ do
         isObstructed: boolean?,
         targetName: string?,
         dt: number?,
-        mode: string?
+        mode: string?,
+        decoupledAngle: number?,
+        silentAimActive: boolean?,
+        lastShot: any?
     })
         if not data then return end
         if SimConfig.Get("TelemetryIndicators") == false then return end
@@ -3440,6 +3528,21 @@ do
             local tName = data.targetName or "NENHUM"
             TelemetryLabels["ActiveTarget"].Text = tName
             TelemetryLabels["ActiveTarget"].TextColor3 = (tName ~= "NENHUM") and THEME.SUCCESS or THEME.TEXT_MUTED
+        end
+
+        if TelemetryLabels["SilentAimStatus"] then
+            local active = data.silentAimActive == true
+            local disc = tonumber(data.decoupledAngle) or 0
+            TelemetryLabels["SilentAimStatus"].Text = active and string.format("Silent Aim: ATIVO (%.1f° desacoplado)", disc) or "Silent Aim: DESATIVADO"
+            TelemetryLabels["SilentAimStatus"].TextColor3 = active and THEME.SUCCESS or THEME.TEXT_MUTED
+        end
+
+        if TelemetryLabels["LastShotStatus"] and data.lastShot then
+            local shot = data.lastShot
+            local hit = shot.HitRegistered == true
+            local discAngle = shot.DiscrepancyAngleDeg or 0
+            TelemetryLabels["LastShotStatus"].Text = hit and string.format("Disparo: ACERTO (%.1f°)", discAngle) or "Disparo: ERRO / DISPERSÃO"
+            TelemetryLabels["LastShotStatus"].TextColor3 = hit and THEME.SUCCESS or THEME.ACCENT_RED
         end
 
         local dt = tonumber(data.dt) or 0.0166
@@ -3730,14 +3833,23 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local silentAimEnabled = SimConfig.Get("SilentAimEnabled") == true
         local silentAimFov = tonumber(SimConfig.Get("SilentAimFOV")) or 35.0
         local silentAimHitChance = tonumber(SimConfig.Get("SilentAimHitChance")) or 100.0
-        local silentAimTracer = SimConfig.Get("SilentAimTracer") == true
+        local silentAimTracer = SimConfig.Get("SilentAimTracer") ~= false
+
+        -- FOV de busca de candidatos:
+        -- Para Aimbot normal utiliza o fov central. Se Silent Aim estiver habilitado,
+        -- expande a área de busca angular para cobrir o diâmetro do cone de Silent Aim (silentAimFov * 2)
+        local aimbotFov = fov
+        local searchFov = aimbotFov
+        if silentAimEnabled then
+            searchFov = math.max(searchFov, silentAimFov * 2)
+        end
 
         -- 1. Detecção Espacial do Melhor Candidato com Prioridades
         local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
             camera.CFrame.Position,
             camera.CFrame.LookVector,
             maxRadius,
-            fov,
+            searchFov,
             preferredBone,
             teamCheck,
             targetPriority,
@@ -3804,7 +3916,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
                 if inFov then
                     silentAimActive = true
-                    currentMode = "SILENT_AIM"
+                    if currentMode == "IDLE" then
+                        currentMode = "SILENT_AIM"
+                    end
 
                     -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s ao mirar ou atirar)
                     local now = os.clock()
@@ -3818,17 +3932,19 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                             isObstructed,
                             bestTarget
                         )
+                        Tracker.LastShotResult = shotResult
                         if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                             local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
+                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
                         end
                     end
                 end
             end
 
             -- 6. Interpolação Cinemática da Câmera (Aimbot Convencional)
-            -- Executa somente quando o Aimbot estiver ativado pelo painel e Silent Aim não estiver sobrescrevendo
-            if aimbotEnabled and shouldAim and isTargetValid and not silentAimActive then
+            -- Executa somente quando o Aimbot estiver ativado pelo painel e o alvo estiver dentro do cone de mira do Aimbot
+            local inAimbotCone = (angleDeg <= (aimbotFov / 2))
+            if aimbotEnabled and shouldAim and isTargetValid and inAimbotCone then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
@@ -3892,7 +4008,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 dt = dt,
                 mode = currentMode,
                 decoupledAngle = decoupledAngle,
-                silentAimActive = silentAimActive
+                silentAimActive = silentAimActive,
+                lastShot = Tracker.LastShotResult
             })
             DashboardGUI:UpdateFovCircle()
             DashboardGUI:UpdateLos(Tracker.LastLos, Tracker.LosHistory)

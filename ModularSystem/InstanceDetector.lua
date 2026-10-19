@@ -23,8 +23,8 @@ function InstanceDetector.new(scanInterval: number?)
     self.LastScanTime = 0
     self.CandidatePool = {} :: { Instance }
     self.LocalPlayer = Players.LocalPlayer
-    self.KnownTags = { "NPC", "Enemy", "Target", "Zombie", "Bot", "Dummy", "Entity", "Character", "Hitbox" }
-    self.SearchFolders = { "NPCs", "Enemies", "Characters", "Zombies", "Bots", "Dummies", "Mobs", "Entities", "Targets", "Spawns" }
+    self.KnownTags = { "NPC", "Enemy", "Target", "Bot", "Dummy", "SyntheticTarget", "TestDummy", "Hitbox" }
+    self.SearchFolders = { "NPCs", "Enemies", "Bots", "Dummies", "Targets", "DeepHat_Targets", "TestDummies", "SyntheticTargets" }
     self.LockedTarget = nil :: Instance?
     self.LockExpiry = 0
     return self
@@ -42,12 +42,14 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
         return false
     end
 
-    -- Ignora explicitamente geometrias estáticas do mundo
+    -- Ignora explicitamente geometrias estáticas do mundo e estruturas de mapa
     if objeto:IsA("Terrain") or objeto.Name == "Terrain" or objeto.Name == "Baseplate" then
         return false
     end
     local lowerName = objeto.Name:lower()
-    if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" then
+    if lowerName == "map" or lowerName == "workspace" or lowerName == "camera" or lowerName:find("baseplate")
+        or lowerName:find("spawn") or lowerName:find("lobby") or lowerName:find("building") or lowerName:find("room")
+        or lowerName:find("road") or lowerName:find("floor") or lowerName:find("wall") or lowerName:find("door") then
         return false
     end
 
@@ -63,6 +65,14 @@ function InstanceDetector:IsValidTarget(objeto: Instance, teamCheck: boolean?): 
     local hum = objeto:FindFirstChildOfClass("Humanoid") or (objeto:IsA("Model") and objeto:FindFirstChildWhichIsA("Humanoid", true))
     if hum and hum.Health <= 0 then
         return false
+    end
+
+    -- Modelos devem conter partes físicas válidas para serem alvos sintéticos
+    if objeto:IsA("Model") then
+        local hasPart = objeto.PrimaryPart or objeto:FindFirstChildWhichIsA("BasePart", true)
+        if not hasPart then
+            return false
+        end
     end
 
     -- Verificação de equipe para Jogadores
@@ -200,23 +210,32 @@ function InstanceDetector:ScanCandidates(teamCheck: boolean?, forceRescan: boole
         end
     end
 
-    -- 4. Filhos diretos e subpastas da raiz do Workspace (Dummies, Rigs e Modelos de Teste)
+    -- 4. Filhos da raiz do Workspace (Apenas Dummies, Rigs e Modelos de Teste Sintéticos Autorizados)
     for _, child in ipairs(Workspace:GetChildren()) do
         if child:IsA("Folder") then
-            for _, grandChild in ipairs(child:GetChildren()) do
-                if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
-                    Ingest(grandChild)
+            -- Pastas da raiz são varridas apenas se forem pastas de teste identificadas
+            local lowerFolderName = child.Name:lower()
+            if lowerFolderName:find("dummy") or lowerFolderName:find("target") or lowerFolderName:find("npc") or lowerFolderName:find("bot") or lowerFolderName:find("test") then
+                for _, grandChild in ipairs(child:GetChildren()) do
+                    if grandChild:IsA("Model") or grandChild:IsA("BasePart") then
+                        Ingest(grandChild)
+                    end
                 end
             end
         elseif child:IsA("Model") then
             local hasHum = child:FindFirstChildOfClass("Humanoid")
             local name = child.Name:lower()
-            if hasHum or name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") then
+            -- Modelos sintéticos autorizados: possuem nomenclatura explícita de teste/NPC ou partes de manequim padrão
+            local hasTestName = name:find("dummy") or name:find("npc") or name:find("enemy") or name:find("target") or name:find("bot") or name:find("rig") or name:find("mannequin") or name:find("synthetic")
+            local hasCharParts = child:FindFirstChild("Head") and (child:FindFirstChild("HumanoidRootPart") or child:FindFirstChild("Torso") or child:FindFirstChild("UpperTorso"))
+            if hasHum and (hasTestName or hasCharParts) then
+                Ingest(child)
+            elseif hasTestName then
                 Ingest(child)
             end
         elseif child:IsA("BasePart") and child.Parent == Workspace then
             local name = child.Name:lower()
-            if name:find("target") or name:find("dummy") or name:find("hitbox") then
+            if name:find("target") or name:find("dummy") or name:find("hitbox") or name:find("synthetic") then
                 Ingest(child)
             end
         end

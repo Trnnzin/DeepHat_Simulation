@@ -66,11 +66,14 @@ function VisualOverlayRenderer:UpdateTargetHighlight(
 
         local ok, newHl = pcall(function()
             local inst = Instance.new("Highlight")
-            inst.Name = "HL_" .. target.Name
+            inst.Name = "DeepHat_HL_" .. target.Name
             inst.Adornee = target
             inst.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             inst.Enabled = true
-            inst.Parent = self.Container
+            -- FIX BUG 3: Anexa diretamente à entidade alvo.
+            -- Impede categoricamente que um Highlight sem Adornee ou órfão tome como alvo o Workspace ou a tela inteira.
+            local safeParent = (target:IsA("Model") or target:IsA("BasePart")) and target or self.Container
+            inst.Parent = safeParent
             return inst
         end)
 

@@ -195,14 +195,23 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
         local silentAimEnabled = SimConfig.Get("SilentAimEnabled") == true
         local silentAimFov = tonumber(SimConfig.Get("SilentAimFOV")) or 35.0
         local silentAimHitChance = tonumber(SimConfig.Get("SilentAimHitChance")) or 100.0
-        local silentAimTracer = SimConfig.Get("SilentAimTracer") == true
+        local silentAimTracer = SimConfig.Get("SilentAimTracer") ~= false
+
+        -- FOV de busca de candidatos:
+        -- Para Aimbot normal utiliza o fov central. Se Silent Aim estiver habilitado,
+        -- expande a área de busca angular para cobrir o diâmetro do cone de Silent Aim (silentAimFov * 2)
+        local aimbotFov = fov
+        local searchFov = aimbotFov
+        if silentAimEnabled then
+            searchFov = math.max(searchFov, silentAimFov * 2)
+        end
 
         -- 1. Detecção Espacial do Melhor Candidato com Prioridades
         local bestTarget, targetPos, dist, angleDeg, targetLabel, targetHealth = Detector:FindBestCandidate(
             camera.CFrame.Position,
             camera.CFrame.LookVector,
             maxRadius,
-            fov,
+            searchFov,
             preferredBone,
             teamCheck,
             targetPriority,
@@ -269,7 +278,9 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
 
                 if inFov then
                     silentAimActive = true
-                    currentMode = "SILENT_AIM"
+                    if currentMode == "IDLE" then
+                        currentMode = "SILENT_AIM"
+                    end
 
                     -- Disparo simulado controlado e traçadores (Throttled a cada 0.10s ao mirar ou atirar)
                     local now = os.clock()
@@ -283,17 +294,19 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                             isObstructed,
                             bestTarget
                         )
+                        Tracker.LastShotResult = shotResult
                         if silentAimTracer and shotResult.Fired and SimConfig.Get("ShowDebugMarkers") ~= false then
                             local beamColor = shotResult.HitRegistered and Color3.fromRGB(46, 230, 110) or Color3.fromRGB(255, 60, 75)
-                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.14)
+                            Tracker:DrawTracerBeam(shotResult.MuzzlePosition, shotResult.TargetPosition, beamColor, 0.22)
                         end
                     end
                 end
             end
 
             -- 6. Interpolação Cinemática da Câmera (Aimbot Convencional)
-            -- Executa somente quando o Aimbot estiver ativado pelo painel e Silent Aim não estiver sobrescrevendo
-            if aimbotEnabled and shouldAim and isTargetValid and not silentAimActive then
+            -- Executa somente quando o Aimbot estiver ativado pelo painel e o alvo estiver dentro do cone de mira do Aimbot
+            local inAimbotCone = (angleDeg <= (aimbotFov / 2))
+            if aimbotEnabled and shouldAim and isTargetValid and inAimbotCone then
                 currentMode = "TRACKING"
 
                 local isAggressive = (SimConfig.Get("ActiveProfile") == "Agressivo")
@@ -357,7 +370,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
                 dt = dt,
                 mode = currentMode,
                 decoupledAngle = decoupledAngle,
-                silentAimActive = silentAimActive
+                silentAimActive = silentAimActive,
+                lastShot = Tracker.LastShotResult
             })
             DashboardGUI:UpdateFovCircle()
             DashboardGUI:UpdateLos(Tracker.LastLos, Tracker.LosHistory)

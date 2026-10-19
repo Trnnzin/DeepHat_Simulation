@@ -757,6 +757,54 @@ function DashboardGUI.Create(parentGui: Instance?): ScreenGui
     CreateSliderField(pageCamera, "Frequência de Atualização (Hz)", "UpdateFrequency", 10, 144, SimConfig.Get("UpdateFrequency"), 5)
     CreateSliderField(pageCamera, "Raio Máximo de Atuação (studs)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
 
+    -- Seção de Silent Aim (Disparo Desacoplado da Câmera)
+    local silentCamHeader = Instance.new("TextLabel")
+    silentCamHeader.Size = UDim2.new(1, 0, 0, 24)
+    silentCamHeader.BackgroundTransparency = 1
+    silentCamHeader.Font = Enum.Font.GothamBold
+    silentCamHeader.TextSize = 11
+    silentCamHeader.TextColor3 = THEME.ACCENT_RED
+    silentCamHeader.TextXAlignment = Enum.TextXAlignment.Left
+    silentCamHeader.Text = "SIMULAÇÃO DE SILENT AIM (DISPARO DESACOPLADO DA CÂMERA)"
+    silentCamHeader.Parent = pageCamera
+
+    CreateToggleField(pageCamera, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
+    CreateSliderField(pageCamera, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1)
+    CreateSliderField(pageCamera, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5)
+    CreateToggleField(pageCamera, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
+
+    -- Card de Telemetria de Silent Aim
+    local silentCard = Instance.new("Frame")
+    silentCard.Size = UDim2.new(1, 0, 0, 36)
+    silentCard.BackgroundColor3 = THEME.BG_INPUT
+    silentCard.Parent = pageCamera
+    AddCorner(silentCard, 6)
+    AddStroke(silentCard, THEME.BORDER, 1)
+
+    local sLbl1 = Instance.new("TextLabel")
+    sLbl1.Size = UDim2.new(0.5, -10, 1, 0)
+    sLbl1.Position = UDim2.new(0, 10, 0, 0)
+    sLbl1.BackgroundTransparency = 1
+    sLbl1.Font = Enum.Font.GothamMedium
+    sLbl1.TextSize = 10
+    sLbl1.TextColor3 = THEME.TEXT_MUTED
+    sLbl1.TextXAlignment = Enum.TextXAlignment.Left
+    sLbl1.Text = "Silent Aim: DESATIVADO"
+    sLbl1.Parent = silentCard
+    TelemetryLabels["SilentAimStatus"] = sLbl1
+
+    local sLbl2 = Instance.new("TextLabel")
+    sLbl2.Size = UDim2.new(0.5, -10, 1, 0)
+    sLbl2.Position = UDim2.new(0.5, 0, 0, 0)
+    sLbl2.BackgroundTransparency = 1
+    sLbl2.Font = Enum.Font.GothamMedium
+    sLbl2.TextSize = 10
+    sLbl2.TextColor3 = THEME.TEXT_MUTED
+    sLbl2.TextXAlignment = Enum.TextXAlignment.Right
+    sLbl2.Text = "Último Disparo: NENHUM"
+    sLbl2.Parent = silentCard
+    TelemetryLabels["LastShotStatus"] = sLbl2
+
     -- =========================================================================
     -- [ABA 3] SIMULAÇÃO & COMPORTAMENTO
     -- =========================================================================
@@ -1491,7 +1539,10 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
     isObstructed: boolean?,
     targetName: string?,
     dt: number?,
-    mode: string?
+    mode: string?,
+    decoupledAngle: number?,
+    silentAimActive: boolean?,
+    lastShot: any?
 })
     if not data then return end
     if SimConfig.Get("TelemetryIndicators") == false then return end
@@ -1515,6 +1566,21 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
         local tName = data.targetName or "NENHUM"
         TelemetryLabels["ActiveTarget"].Text = tName
         TelemetryLabels["ActiveTarget"].TextColor3 = (tName ~= "NENHUM") and THEME.SUCCESS or THEME.TEXT_MUTED
+    end
+
+    if TelemetryLabels["SilentAimStatus"] then
+        local active = data.silentAimActive == true
+        local disc = tonumber(data.decoupledAngle) or 0
+        TelemetryLabels["SilentAimStatus"].Text = active and string.format("Silent Aim: ATIVO (%.1f° desacoplado)", disc) or "Silent Aim: DESATIVADO"
+        TelemetryLabels["SilentAimStatus"].TextColor3 = active and THEME.SUCCESS or THEME.TEXT_MUTED
+    end
+
+    if TelemetryLabels["LastShotStatus"] and data.lastShot then
+        local shot = data.lastShot
+        local hit = shot.HitRegistered == true
+        local discAngle = shot.DiscrepancyAngleDeg or 0
+        TelemetryLabels["LastShotStatus"].Text = hit and string.format("Disparo: ACERTO (%.1f°)", discAngle) or "Disparo: ERRO / DISPERSÃO"
+        TelemetryLabels["LastShotStatus"].TextColor3 = hit and THEME.SUCCESS or THEME.ACCENT_RED
     end
 
     local dt = tonumber(data.dt) or 0.0166
