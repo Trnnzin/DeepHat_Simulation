@@ -2,8 +2,16 @@
 -- =========================================================================
 -- DashboardGUI.lua
 -- Interface Profissional de Simulação Cinemática e Diagnósticos de Detecção
--- Design: 5 Abas Objetivas e Simplificadas (Mira, Silent Aim, Balística, Diagnóstico, Configurações)
--- Conexão Reativa Bidirecional com SimConfig, Suporte a Chatbot IA e Pipeline de 4 Etapas
+-- Versão: V8.0 PRO — Plataforma Profissional com Design Grafite & Deep Purple
+-- Arquitetura em 8 Abas Especializadas:
+--   1. Dashboard: Visão Geral, Indicadores KPI, Watchdog e Ações Rápidas
+--   2. Mira Simulada: Parâmetros Cinemáticos, Suavização, FOV e Deadband
+--   3. Player & Disparos: Manequim Sintético, Silent Aim e Pipeline em 5 Etapas
+--   4. ESP de Teste: Highlights Chams e Tags 3D Flutuantes (BillboardGui)
+--   5. Balística: Trajetória Física sob Gravidade, Predição de Lead e Fórmulas
+--   6. Diagnóstico & IA: Análise de 6 Camadas, Hipóteses, Chatbot e Exportação
+--   7. Logs & Eventos: Terminal de Observabilidade, Filtros e Busca Textual
+--   8. Configurações: Perfis, Importação/Exportação JSON e Reset de Padrões
 -- =========================================================================
 
 local Players = game:GetService("Players")
@@ -14,26 +22,28 @@ local CoreGuiService = game:GetService("CoreGui")
 
 local SimConfig = require(script.Parent.SimConfig)
 local ScenarioRunner = require(script.Parent.ScenarioRunner)
+local DiagnosticAI = require(script.Parent.DiagnosticAI)
 
 local DashboardGUI = {}
 DashboardGUI.__index = DashboardGUI
 
--- [DESIGN SYSTEM & TOKENS VISUAIS]
+-- [DESIGN SYSTEM & TOKENS VISUAIS - TEMA GRAFITE & DEEP PURPLE V8]
 local THEME = {
-    BG_WINDOW    = Color3.fromRGB(11, 12, 16),
-    BG_SIDEBAR   = Color3.fromRGB(16, 18, 23),
-    BG_CARD      = Color3.fromRGB(20, 23, 30),
-    BG_INPUT     = Color3.fromRGB(27, 31, 40),
-    BORDER       = Color3.fromRGB(38, 43, 56),
-    BORDER_LIGHT = Color3.fromRGB(55, 62, 80),
-    TEXT_MAIN    = Color3.fromRGB(245, 246, 250),
-    TEXT_MUTED   = Color3.fromRGB(135, 144, 160),
-    ACCENT_RED   = Color3.fromRGB(224, 43, 54),
-    ACCENT_HOVER = Color3.fromRGB(255, 65, 75),
-    ACCENT_GLOW  = Color3.fromRGB(90, 20, 25),
-    SUCCESS      = Color3.fromRGB(46, 204, 113),
-    WARNING      = Color3.fromRGB(241, 196, 15),
-    INFO         = Color3.fromRGB(52, 152, 219),
+    BG_WINDOW     = Color3.fromRGB(13, 14, 20),      -- Grafite ultra-escuro profundo
+    BG_SIDEBAR    = Color3.fromRGB(17, 18, 26),      -- Grafite escuro lateral
+    BG_CARD       = Color3.fromRGB(22, 24, 34),      -- Cartão com tom sutil grafite/antracite
+    BG_INPUT      = Color3.fromRGB(28, 30, 44),      -- Fundo de inputs e toggles
+    BORDER        = Color3.fromRGB(46, 44, 68),      -- Borda sutil grafite-púrpura
+    BORDER_LIGHT  = Color3.fromRGB(68, 64, 102),     -- Borda destacada
+    TEXT_MAIN     = Color3.fromRGB(245, 245, 252),   -- Texto primário límpido
+    TEXT_MUTED    = Color3.fromRGB(152, 154, 178),   -- Texto secundário suave
+    ACCENT_PURPLE = Color3.fromRGB(138, 75, 255),    -- Roxo vibrante moderno (V8 Accent)
+    ACCENT_HOVER  = Color3.fromRGB(162, 105, 255),   -- Roxo luminoso para hover/foco
+    ACCENT_GLOW   = Color3.fromRGB(65, 28, 120),     -- Brilho ambiente roxo
+    ACCENT_RED    = Color3.fromRGB(235, 59, 90),     -- Alertas e gravação
+    SUCCESS       = Color3.fromRGB(46, 204, 113),    -- Verde confirmação OK
+    WARNING       = Color3.fromRGB(241, 196, 15),    -- Amarelo WARN
+    INFO          = Color3.fromRGB(116, 125, 255),   -- Índigo/Azul claro INFO
 }
 
 -- Callbacks de Ação Global
@@ -45,9 +55,12 @@ DashboardGUI.OnRunLosScenario = nil :: ((string) -> ())?
 DashboardGUI.OnClearLosHistory = nil :: (() -> ())?
 DashboardGUI.OnSimulateSilentAimShot = nil :: (() -> ())?
 DashboardGUI.OnSpawnTestDummy = nil :: (() -> ())?
+DashboardGUI.OnClearTestDummies = nil :: (() -> ())?
 DashboardGUI.OnRunShotScenario = nil :: ((string) -> ())?
 DashboardGUI.OnQueryDiagnosticChatbot = nil :: ((string) -> any)?
 DashboardGUI.OnRunFullDiagnostic = nil :: (() -> any)?
+DashboardGUI.OnExportDiagnosticsJSON = nil :: (() -> string)?
+DashboardGUI.OnExportDiagnosticsMarkdown = nil :: (() -> string)?
 
 -- Instâncias Internas
 local ScreenGuiInstance: ScreenGui? = nil
@@ -55,6 +68,7 @@ local MainFrameInstance: Frame? = nil
 local FovCircleInstance: Frame? = nil
 local WatchdogBadgeInstance: TextLabel? = nil
 local EventLogListInstance: ScrollingFrame? = nil
+local LogCounterLabelInstance: TextLabel? = nil
 local unsubscribeGlobal: (() -> ())? = nil
 
 -- Elementos de Telemetria Dinâmica
@@ -63,13 +77,15 @@ local LosLabels: { [string]: TextLabel } = {}
 local DetLabels: { [string]: TextLabel } = {}
 local LosHistoryList: ScrollingFrame? = nil
 local LastRenderedLosStamp = -1
-local ApplyRuntimeConfig: ((string, any) -> ())? = nil
 local PerformanceData = {
     Fps = 60,
     PeakAngVel = 0,
     LastCheck = os.clock(),
     ErrorCount = 0,
 }
+
+local currentLogFilter = "TODOS"
+local currentLogSearch = ""
 
 local function AddCorner(parent: Instance, radius: number): UICorner
     local corner = Instance.new("UICorner")
@@ -108,33 +124,41 @@ local function GetSafeGuiParent(): Instance
     end
 
     if localPlayer then
-        local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
-        if not playerGui then
-            pcall(function() playerGui = localPlayer:WaitForChild("PlayerGui", 5) end)
-        end
-        if playerGui then return playerGui end
+        local pGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+        if pGui then return pGui end
     end
 
-    if okCore and coreGui then return coreGui end
     return Workspace
 end
 
 -- =========================================================================
--- LOG DE DIAGNÓSTICOS EM TEMPO REAL COM FILTRAGEM MULTI-NÍVEL
+-- LOG DE DIAGNÓSTICOS EM TEMPO REAL COM FILTRAGEM E BUSCA
 -- =========================================================================
-local currentLogFilter = "TODOS"
-
 local function ApplyLogFilter()
     if not EventLogListInstance then return end
+    local visibleCount = 0
+    local totalCount = 0
+    local query = string.lower(currentLogSearch)
+
     for _, child in ipairs(EventLogListInstance:GetChildren()) do
         if child:IsA("Frame") then
+            totalCount = totalCount + 1
             local lvl = child:GetAttribute("LogLevel") or "INFO"
-            if currentLogFilter == "TODOS" or lvl == currentLogFilter then
+            local text = string.lower(tostring(child:GetAttribute("LogText") or ""))
+            local levelMatch = (currentLogFilter == "TODOS" or lvl == currentLogFilter)
+            local searchMatch = (query == "" or string.find(text, query, 1, true) ~= nil)
+
+            if levelMatch and searchMatch then
                 child.Visible = true
+                visibleCount = visibleCount + 1
             else
                 child.Visible = false
             end
         end
+    end
+
+    if LogCounterLabelInstance and LogCounterLabelInstance.Parent then
+        LogCounterLabelInstance.Text = string.format("Exibindo %d de %d eventos", visibleCount, totalCount)
     end
 end
 
@@ -148,42 +172,55 @@ function DashboardGUI.AddDiagnosticLog(source: string, message: string, level: (
     elseif rowLevel == "INFO" then color = THEME.INFO
     elseif rowLevel == "FAIL" then color = THEME.ACCENT_RED end
 
+    local timeStr = os.date("%H:%M:%S")
+    local fullText = string.format("[%s] [%s] %s", timeStr, source, message)
+
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 20)
+    row.Size = UDim2.new(1, 0, 0, 22)
     row.BackgroundColor3 = THEME.BG_INPUT
     row.BackgroundTransparency = 0.5
     row:SetAttribute("LogLevel", rowLevel)
-    if currentLogFilter ~= "TODOS" and rowLevel ~= currentLogFilter then
-        row.Visible = false
-    else
-        row.Visible = true
-    end
+    row:SetAttribute("LogText", fullText)
+
+    local query = string.lower(currentLogSearch)
+    local levelMatch = (currentLogFilter == "TODOS" or rowLevel == currentLogFilter)
+    local searchMatch = (query == "" or string.find(string.lower(fullText), query, 1, true) ~= nil)
+    row.Visible = (levelMatch and searchMatch)
     row.Parent = EventLogListInstance
-    AddCorner(row, 3)
+    AddCorner(row, 4)
+
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 6, 0, 6)
+    dot.Position = UDim2.new(0, 6, 0.5, -3)
+    dot.BackgroundColor3 = color
+    dot.BorderSizePixel = 0
+    dot.Parent = row
+    AddCorner(dot, 3)
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -8, 1, 0)
-    lbl.Position = UDim2.new(0, 5, 0, 0)
+    lbl.Size = UDim2.new(1, -22, 1, 0)
+    lbl.Position = UDim2.new(0, 18, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Font = Enum.Font.Code
     lbl.TextSize = 10
     lbl.TextColor3 = color
     lbl.TextXAlignment = Enum.TextXAlignment.Left
-    local timeStr = os.date("%H:%M:%S")
-    lbl.Text = string.format("[%s] [%s] %s", timeStr, source, message)
+    lbl.Text = fullText
     lbl.Parent = row
 
     local children = EventLogListInstance:GetChildren()
-    if #children > 45 then
-        for i = 1, #children - 45 do
+    if #children > 60 then
+        for i = 1, #children - 60 do
             if children[i]:IsA("Frame") then children[i]:Destroy() end
         end
     end
+
+    ApplyLogFilter()
     EventLogListInstance.CanvasPosition = Vector2.new(0, 99999)
 end
 
 -- =========================================================================
--- CONSTRUÇÃO DA INTERFACE PRINCIPAL (5 ABAS OBJETIVAS)
+-- CONSTRUÇÃO DA INTERFACE PRINCIPAL (8 ABAS FUNCIONAIS V8)
 -- =========================================================================
 function DashboardGUI.Create(): ScreenGui
     local oldGui = CoreGuiService:FindFirstChild("DeepHat_DashboardUI")
@@ -193,9 +230,11 @@ function DashboardGUI.Create(): ScreenGui
     end
 
     local guiParent = GetSafeGuiParent()
+
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "DeepHat_DashboardUI"
     screenGui.ResetOnSpawn = false
+    screenGui.DisplayOrder = 1000
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = guiParent
     ScreenGuiInstance = screenGui
@@ -210,15 +249,15 @@ function DashboardGUI.Create(): ScreenGui
     fovCircle.Visible = SimConfig.Get("ShowFovCircle") == true and SimConfig.Get("SimulationActive") == true
     fovCircle.Parent = screenGui
     AddCorner(fovCircle, 9999)
-    local fovStroke = AddStroke(fovCircle, THEME.ACCENT_RED, 1.5)
-    fovStroke.Transparency = 0.4
+    local fovStroke = AddStroke(fovCircle, THEME.ACCENT_PURPLE, 1.5)
+    fovStroke.Transparency = 0.35
     FovCircleInstance = fovCircle
 
     local fovCenterDot = Instance.new("Frame")
     fovCenterDot.Size = UDim2.new(0, 4, 0, 4)
     fovCenterDot.AnchorPoint = Vector2.new(0.5, 0.5)
     fovCenterDot.Position = UDim2.new(0.5, 0, 0.5, 0)
-    fovCenterDot.BackgroundColor3 = THEME.ACCENT_RED
+    fovCenterDot.BackgroundColor3 = THEME.ACCENT_PURPLE
     fovCenterDot.BackgroundTransparency = 0.2
     fovCenterDot.Parent = fovCircle
     AddCorner(fovCenterDot, 2)
@@ -226,7 +265,7 @@ function DashboardGUI.Create(): ScreenGui
     -- Janela Principal
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 960, 0, 580)
+    mainFrame.Size = UDim2.new(0, 980, 0, 600)
     mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
     mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     mainFrame.BackgroundColor3 = THEME.BG_WINDOW
@@ -241,7 +280,7 @@ function DashboardGUI.Create(): ScreenGui
     -- Header da Janela
     local header = Instance.new("Frame")
     header.Name = "Header"
-    header.Size = UDim2.new(1, 0, 0, 44)
+    header.Size = UDim2.new(1, 0, 0, 46)
     header.BackgroundColor3 = THEME.BG_SIDEBAR
     header.BorderSizePixel = 0
     header.Parent = mainFrame
@@ -273,61 +312,57 @@ function DashboardGUI.Create(): ScreenGui
 
     -- Marca e Título
     local brandDot = Instance.new("Frame")
-    brandDot.Size = UDim2.new(0, 8, 0, 8)
-    brandDot.Position = UDim2.new(0, 16, 0.5, -4)
-    brandDot.BackgroundColor3 = THEME.ACCENT_RED
+    brandDot.Size = UDim2.new(0, 10, 0, 10)
+    brandDot.Position = UDim2.new(0, 14, 0.5, -5)
+    brandDot.BackgroundColor3 = THEME.ACCENT_PURPLE
     brandDot.Parent = header
-    AddCorner(brandDot, 4)
+    AddCorner(brandDot, 5)
 
     local titleLabel = Instance.new("TextLabel")
-    titleLabel.Size = UDim2.new(0, 360, 1, 0)
-    titleLabel.Position = UDim2.new(0, 32, 0, 0)
+    titleLabel.Size = UDim2.new(0, 360, 0, 22)
+    titleLabel.Position = UDim2.new(0, 32, 0, 4)
     titleLabel.BackgroundTransparency = 1
     titleLabel.Font = Enum.Font.GothamBold
     titleLabel.TextSize = 13
     titleLabel.TextColor3 = THEME.TEXT_MAIN
     titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    titleLabel.Text = "DEEPHAT SIMULATION SUITE // v7.0 PRO"
+    titleLabel.Text = "DEEPHAT SIMULATION SUITE // v8.0 PRO"
     titleLabel.Parent = header
 
-    -- Badge de Watchdog
+    local subtitleLabel = Instance.new("TextLabel")
+    subtitleLabel.Size = UDim2.new(0, 360, 0, 14)
+    subtitleLabel.Position = UDim2.new(0, 32, 0, 24)
+    subtitleLabel.BackgroundTransparency = 1
+    subtitleLabel.Font = Enum.Font.GothamMedium
+    subtitleLabel.TextSize = 9
+    subtitleLabel.TextColor3 = THEME.TEXT_MUTED
+    subtitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    subtitleLabel.Text = "Professional Simulation, Ballistics & AI Diagnostics Engine"
+    subtitleLabel.Parent = header
+
+    -- Badge de Watchdog / Monitor de Saúde
     local watchdogBadge = Instance.new("TextLabel")
     watchdogBadge.Size = UDim2.new(0, 240, 0, 24)
-    watchdogBadge.Position = UDim2.new(1, -330, 0.5, -12)
+    watchdogBadge.Position = UDim2.new(1, -340, 0.5, -12)
     watchdogBadge.BackgroundColor3 = THEME.BG_INPUT
     watchdogBadge.Font = Enum.Font.GothamMedium
-    watchdogBadge.TextSize = 10
+    watchdogBadge.TextSize = 9.5
     watchdogBadge.TextColor3 = THEME.SUCCESS
-    watchdogBadge.Text = "● WATCHDOG: 100% OPERACIONAL"
+    watchdogBadge.Text = "● MONITOR: 100% OPERACIONAL"
     watchdogBadge.Parent = header
     AddCorner(watchdogBadge, 4)
     AddStroke(watchdogBadge, THEME.BORDER, 1)
     WatchdogBadgeInstance = watchdogBadge
 
     local hotkeyNotice = Instance.new("TextLabel")
-    hotkeyNotice.Size = UDim2.new(0, 100, 1, 0)
-    hotkeyNotice.Position = UDim2.new(1, -160, 0, 0)
+    hotkeyNotice.Size = UDim2.new(0, 90, 1, 0)
+    hotkeyNotice.Position = UDim2.new(1, -95, 0, 0)
     hotkeyNotice.BackgroundTransparency = 1
     hotkeyNotice.Font = Enum.Font.GothamMedium
-    hotkeyNotice.TextSize = 10
+    hotkeyNotice.TextSize = 9
     hotkeyNotice.TextColor3 = THEME.TEXT_MUTED
     hotkeyNotice.Text = "[HOME] Ocultar"
     hotkeyNotice.Parent = header
-
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 28, 0, 28)
-    closeBtn.Position = UDim2.new(1, -38, 0.5, -14)
-    closeBtn.BackgroundColor3 = THEME.BG_INPUT
-    closeBtn.TextColor3 = THEME.TEXT_MAIN
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.TextSize = 12
-    closeBtn.Text = "✕"
-    closeBtn.Parent = header
-    AddCorner(closeBtn, 5)
-    AddStroke(closeBtn, THEME.BORDER, 1)
-    closeBtn.MouseButton1Click:Connect(function()
-        mainFrame.Visible = not mainFrame.Visible
-    end)
 
     UserInputService.InputBegan:Connect(function(input, gpe)
         if input.KeyCode == Enum.KeyCode.Home or input.KeyCode == Enum.KeyCode.RightShift then
@@ -345,7 +380,7 @@ function DashboardGUI.Create(): ScreenGui
 
     local sidebar = Instance.new("Frame")
     sidebar.Name = "Sidebar"
-    sidebar.Size = UDim2.new(0, 190, 1, 0)
+    sidebar.Size = UDim2.new(0, 195, 1, 0)
     sidebar.BackgroundColor3 = THEME.BG_SIDEBAR
     sidebar.BorderSizePixel = 0
     sidebar.Parent = body
@@ -353,47 +388,54 @@ function DashboardGUI.Create(): ScreenGui
     AddStroke(sidebar, THEME.BORDER, 1)
 
     local sidebarList = Instance.new("UIListLayout")
-    sidebarList.Padding = UDim.new(0, 6)
+    sidebarList.Padding = UDim.new(0, 4)
     sidebarList.Parent = sidebar
 
     local sidebarPad = Instance.new("UIPadding")
-    sidebarPad.PaddingTop = UDim.new(0, 12)
-    sidebarPad.PaddingLeft = UDim.new(0, 8)
-    sidebarPad.PaddingRight = UDim.new(0, 8)
+    sidebarPad.PaddingTop = UDim.new(0, 8)
+    sidebarPad.PaddingLeft = UDim.new(0, 6)
+    sidebarPad.PaddingRight = UDim.new(0, 6)
     sidebarPad.Parent = sidebar
 
     local mainContent = Instance.new("Frame")
     mainContent.Name = "MainContent"
-    mainContent.Size = UDim2.new(1, -204, 1, 0)
-    mainContent.Position = UDim2.new(0, 198, 0, 0)
+    mainContent.Size = UDim2.new(1, -205, 1, 0)
+    mainContent.Position = UDim2.new(0, 200, 0, 0)
     mainContent.BackgroundColor3 = THEME.BG_CARD
     mainContent.BorderSizePixel = 0
     mainContent.Parent = body
     AddCorner(mainContent, 8)
     AddStroke(mainContent, THEME.BORDER, 1)
 
-    -- 5 ABAS OBJETIVAS (FASE 5)
+    -- 8 ABAS ESPECIALIZADAS V8
     local pages: { [string]: ScrollingFrame } = {}
     local tabButtons: { [string]: TextButton } = {}
 
     local tabs = {
+        { Id = "Dashboard",     Label = "📊  Dashboard" },
         { Id = "AimSimulation", Label = "◎  Mira Simulada" },
-        { Id = "SilentAim",     Label = "🎯  Disparos Simulados" },
-        { Id = "Ballistics",    Label = "⚡  Balística" },
-        { Id = "Diagnostics",  Label = "▤  Diagnóstico & IA" },
-        { Id = "Settings",     Label = "⚙  Configurações" },
+        { Id = "SilentAim",     Label = "🎯  Player & Disparos" },
+        { Id = "ESP",           Label = "👁️  ESP de Teste" },
+        { Id = "Ballistics",    Label = "⚡  Balística & Física" },
+        { Id = "Diagnostics",  Label = "🧠  Diagnóstico IA" },
+        { Id = "Logs",          Label = "📋  Logs & Eventos" },
+        { Id = "Settings",     Label = "⚙️  Configurações" },
     }
 
     local function SwitchTab(tabId: string)
         if not pages[tabId] then
-            if tabId == "Dashboard" or tabId == "Camera" or tabId == "Simulation" or tabId == "Hitbox" then
+            if tabId == "Overview" or tabId == "Camera" or tabId == "Simulation" then
+                tabId = "Dashboard"
+            elseif tabId == "Hitbox" then
                 tabId = "AimSimulation"
+            elseif tabId == "Player" then
+                tabId = "SilentAim"
             elseif tabId == "Vision" then
-                tabId = "Ballistics"
+                tabId = "ESP"
             elseif tabId == "LineOfSight" or tabId == "Performance" then
                 tabId = "Diagnostics"
             else
-                tabId = "AimSimulation"
+                tabId = "Dashboard"
             end
         end
         for id, page in pairs(pages) do
@@ -401,23 +443,35 @@ function DashboardGUI.Create(): ScreenGui
         end
         for id, btn in pairs(tabButtons) do
             local active = (id == tabId)
-            btn.BackgroundColor3 = active and THEME.ACCENT_RED or THEME.BG_INPUT
+            btn.BackgroundColor3 = active and THEME.ACCENT_PURPLE or THEME.BG_INPUT
             btn.TextColor3 = active and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            local ind = btn:FindFirstChild("ActiveIndicator") :: Frame?
+            if ind then ind.Visible = active end
         end
         SimConfig.Set("ActiveTab", tabId)
     end
 
     for _, t in ipairs(tabs) do
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, 0, 0, 36)
+        btn.Size = UDim2.new(1, 0, 0, 32)
         btn.BackgroundColor3 = THEME.BG_INPUT
         btn.TextColor3 = THEME.TEXT_MUTED
         btn.Font = Enum.Font.GothamMedium
-        btn.TextSize = 11
+        btn.TextSize = 10.5
         btn.TextXAlignment = Enum.TextXAlignment.Left
-        btn.Text = "  " .. t.Label
+        btn.Text = "   " .. t.Label
         btn.Parent = sidebar
         AddCorner(btn, 5)
+
+        local indicator = Instance.new("Frame")
+        indicator.Name = "ActiveIndicator"
+        indicator.Size = UDim2.new(0, 3, 1, -8)
+        indicator.Position = UDim2.new(0, 3, 0, 4)
+        indicator.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        indicator.BorderSizePixel = 0
+        indicator.Visible = false
+        indicator.Parent = btn
+        AddCorner(indicator, 2)
 
         tabButtons[t.Id] = btn
         btn.MouseButton1Click:Connect(function() SwitchTab(t.Id) end)
@@ -434,12 +488,12 @@ function DashboardGUI.Create(): ScreenGui
         page.Parent = mainContent
 
         local pList = Instance.new("UIListLayout")
-        pList.Padding = UDim.new(0, 10)
+        pList.Padding = UDim.new(0, 8)
         pList.Parent = page
 
         local pPad = Instance.new("UIPadding")
-        pPad.PaddingTop = UDim.new(0, 12); pPad.PaddingBottom = UDim.new(0, 40)
-        pPad.PaddingLeft = UDim.new(0, 14); pPad.PaddingRight = UDim.new(0, 14)
+        pPad.PaddingTop = UDim.new(0, 10); pPad.PaddingBottom = UDim.new(0, 30)
+        pPad.PaddingLeft = UDim.new(0, 12); pPad.PaddingRight = UDim.new(0, 12)
         pPad.Parent = page
 
         pages[t.Id] = page
@@ -448,23 +502,38 @@ function DashboardGUI.Create(): ScreenGui
     local syncInputs: { [string]: (number) -> () } = {}
 
     -- CONSTRUTOR DE COMPONENTES DE UI
-    local function CreateSectionHeader(parent: Instance, title: string): TextLabel
+    local function CreateSectionHeader(parent: Instance, title: string): Frame
+        local hFrame = Instance.new("Frame")
+        hFrame.Size = UDim2.new(1, 0, 0, 20)
+        hFrame.BackgroundTransparency = 1
+        hFrame.Parent = parent
+
+        local bar = Instance.new("Frame")
+        bar.Size = UDim2.new(0, 3, 0, 13)
+        bar.Position = UDim2.new(0, 0, 0.5, -6)
+        bar.BackgroundColor3 = THEME.ACCENT_PURPLE
+        bar.BorderSizePixel = 0
+        bar.Parent = hFrame
+        AddCorner(bar, 2)
+
         local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, 0, 0, 22)
+        lbl.Size = UDim2.new(1, -10, 1, 0)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
         lbl.BackgroundTransparency = 1
         lbl.Font = Enum.Font.GothamBold
-        lbl.TextSize = 11
-        lbl.TextColor3 = THEME.ACCENT_RED
+        lbl.TextSize = 10.5
+        lbl.TextColor3 = THEME.TEXT_MAIN
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.Text = title
-        lbl.Parent = parent
-        return lbl
+        lbl.Parent = hFrame
+
+        return hFrame
     end
 
     local function CreateSliderField(parent: Instance, labelText: string, configKey: string, minVal: number, maxVal: number, defaultVal: number, step: number, subtitleText: string?): Frame
         local span = math.max(maxVal - minVal, 0.0001)
         local safeDefault = tonumber(SimConfig.Get(configKey)) or defaultVal or minVal
-        local height = subtitleText and 54 or 46
+        local height = subtitleText and 52 or 44
 
         local container = Instance.new("Frame")
         container.Name = "SliderRow_" .. configKey
@@ -485,7 +554,7 @@ function DashboardGUI.Create(): ScreenGui
         title.Size = UDim2.new(1, -70, subtitleText and 0.6 or 1, 0)
         title.BackgroundTransparency = 1
         title.Font = Enum.Font.GothamMedium
-        title.TextSize = 11
+        title.TextSize = 10.5
         title.TextColor3 = THEME.TEXT_MAIN
         title.TextXAlignment = Enum.TextXAlignment.Left
         title.Text = labelText
@@ -497,7 +566,7 @@ function DashboardGUI.Create(): ScreenGui
             sub.Position = UDim2.new(0, 0, 0.6, 0)
             sub.BackgroundTransparency = 1
             sub.Font = Enum.Font.GothamMedium
-            sub.TextSize = 9
+            sub.TextSize = 8.5
             sub.TextColor3 = THEME.TEXT_MUTED
             sub.TextXAlignment = Enum.TextXAlignment.Left
             sub.Text = subtitleText
@@ -505,12 +574,12 @@ function DashboardGUI.Create(): ScreenGui
         end
 
         local numInput = Instance.new("TextBox")
-        numInput.Size = UDim2.new(0, 60, 0, 20)
-        numInput.Position = UDim2.new(1, -60, 0, 2)
+        numInput.Size = UDim2.new(0, 56, 0, 18)
+        numInput.Position = UDim2.new(1, -56, 0, 2)
         numInput.BackgroundColor3 = THEME.BG_WINDOW
-        numInput.TextColor3 = THEME.ACCENT_RED
+        numInput.TextColor3 = THEME.ACCENT_PURPLE
         numInput.Font = Enum.Font.GothamBold
-        numInput.TextSize = 11
+        numInput.TextSize = 10
         numInput.Text = string.format(step < 1 and "%.2f" or "%d", safeDefault)
         numInput.ClearTextOnFocus = false
         numInput.Parent = rowHeader
@@ -518,8 +587,8 @@ function DashboardGUI.Create(): ScreenGui
         AddStroke(numInput, THEME.BORDER, 1)
 
         local track = Instance.new("Frame")
-        track.Size = UDim2.new(1, -16, 0, 6)
-        track.Position = UDim2.new(0, 8, 0, subtitleText and 38 or 30)
+        track.Size = UDim2.new(1, -16, 0, 5)
+        track.Position = UDim2.new(0, 8, 0, subtitleText and 36 or 28)
         track.BackgroundColor3 = THEME.BG_WINDOW
         track.Parent = container
         AddCorner(track, 3)
@@ -527,7 +596,7 @@ function DashboardGUI.Create(): ScreenGui
         local initialRatio = math.clamp((safeDefault - minVal) / span, 0, 1)
         local fill = Instance.new("Frame")
         fill.Size = UDim2.new(initialRatio, 0, 1, 0)
-        fill.BackgroundColor3 = THEME.ACCENT_RED
+        fill.BackgroundColor3 = THEME.ACCENT_PURPLE
         fill.BorderSizePixel = 0
         fill.Parent = track
         AddCorner(fill, 3)
@@ -579,9 +648,10 @@ function DashboardGUI.Create(): ScreenGui
         return container
     end
 
-    local function CreateToggleField(parent: Instance, labelText: string, configKey: string, defaultState: boolean): Frame
+    local function CreateToggleField(parent: Instance, labelText: string, configKey: string, defaultState: boolean, subtitleText: string?): Frame
+        local height = subtitleText and 48 or 38
         local container = Instance.new("Frame")
-        container.Size = UDim2.new(1, 0, 0, 36)
+        container.Size = UDim2.new(1, 0, 0, height)
         container.BackgroundColor3 = THEME.BG_INPUT
         container.BackgroundTransparency = 0.5
         container.Parent = parent
@@ -589,37 +659,67 @@ function DashboardGUI.Create(): ScreenGui
         AddStroke(container, THEME.BORDER, 1)
 
         local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -60, 1, 0)
-        title.Position = UDim2.new(0, 10, 0, 0)
+        title.Size = UDim2.new(1, -115, subtitleText and 0.55 or 1, 0)
+        title.Position = UDim2.new(0, 10, 0, subtitleText and 3 or 0)
         title.BackgroundTransparency = 1
         title.Font = Enum.Font.GothamMedium
-        title.TextSize = 11
+        title.TextSize = 10.5
         title.TextColor3 = THEME.TEXT_MAIN
         title.TextXAlignment = Enum.TextXAlignment.Left
         title.Text = labelText
         title.Parent = container
 
+        if subtitleText then
+            local sub = Instance.new("TextLabel")
+            sub.Size = UDim2.new(1, -115, 0.45, 0)
+            sub.Position = UDim2.new(0, 10, 0.55, 0)
+            sub.BackgroundTransparency = 1
+            sub.Font = Enum.Font.GothamMedium
+            sub.TextSize = 8.5
+            sub.TextColor3 = THEME.TEXT_MUTED
+            sub.TextXAlignment = Enum.TextXAlignment.Left
+            sub.Text = subtitleText
+            sub.Parent = container
+        end
+
+        -- Badge de Status ON / OFF
+        local statusBadge = Instance.new("TextLabel")
+        statusBadge.Size = UDim2.new(0, 36, 0, 20)
+        statusBadge.Position = UDim2.new(1, -94, 0.5, -10)
+        statusBadge.BackgroundColor3 = defaultState and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+        statusBadge.Font = Enum.Font.GothamBold
+        statusBadge.TextSize = 9
+        statusBadge.TextColor3 = defaultState and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+        statusBadge.Text = defaultState and "ON" or "OFF"
+        statusBadge.Parent = container
+        AddCorner(statusBadge, 4)
+        AddStroke(statusBadge, THEME.BORDER, 1)
+
+        -- Switch Pill com Dot Deslizante
         local toggleBtn = Instance.new("TextButton")
-        toggleBtn.Size = UDim2.new(0, 44, 0, 22)
-        toggleBtn.Position = UDim2.new(1, -54, 0.5, -11)
-        toggleBtn.BackgroundColor3 = defaultState and THEME.ACCENT_RED or THEME.BG_WINDOW
+        toggleBtn.Size = UDim2.new(0, 42, 0, 20)
+        toggleBtn.Position = UDim2.new(1, -50, 0.5, -10)
+        toggleBtn.BackgroundColor3 = defaultState and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
         toggleBtn.Text = ""
         toggleBtn.Parent = container
-        AddCorner(toggleBtn, 11)
+        AddCorner(toggleBtn, 10)
         AddStroke(toggleBtn, THEME.BORDER, 1)
 
         local dot = Instance.new("Frame")
-        dot.Size = UDim2.new(0, 16, 0, 16)
-        dot.Position = defaultState and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+        dot.Size = UDim2.new(0, 14, 0, 14)
+        dot.Position = defaultState and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
         dot.BackgroundColor3 = THEME.TEXT_MAIN
         dot.Parent = toggleBtn
-        AddCorner(dot, 8)
+        AddCorner(dot, 7)
 
         local function SetToggle(state: boolean)
             local ok, err = SimConfig.Set(configKey, state)
             if ok then
-                toggleBtn.BackgroundColor3 = state and THEME.ACCENT_RED or THEME.BG_WINDOW
-                dot.Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+                statusBadge.BackgroundColor3 = state and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+                statusBadge.TextColor3 = state and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+                statusBadge.Text = state and "ON" or "OFF"
+                toggleBtn.BackgroundColor3 = state and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+                dot.Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
             else
                 DashboardGUI.AddDiagnosticLog("CONFIG", string.format("Falha ao alternar '%s': %s", configKey, tostring(err)), "WARN")
             end
@@ -631,8 +731,79 @@ function DashboardGUI.Create(): ScreenGui
         end)
         SimConfig.Subscribe(configKey, function(val)
             local state = (val == true)
-            toggleBtn.BackgroundColor3 = state and THEME.ACCENT_RED or THEME.BG_WINDOW
-            dot.Position = state and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+            statusBadge.BackgroundColor3 = state and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+            statusBadge.TextColor3 = state and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            statusBadge.Text = state and "ON" or "OFF"
+            toggleBtn.BackgroundColor3 = state and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+            dot.Position = state and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 3, 0.5, -7)
+        end)
+
+        return container
+    end
+
+    local function CreateSegmentedButtons(parent: Instance, labelText: string, configKey: string, options: { { Id: string, Label: string } }): Frame
+        local container = Instance.new("Frame")
+        container.Size = UDim2.new(1, 0, 0, 48)
+        container.BackgroundColor3 = THEME.BG_INPUT
+        container.BackgroundTransparency = 0.5
+        container.Parent = parent
+        AddCorner(container, 6)
+        AddStroke(container, THEME.BORDER, 1)
+
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(0.35, 0, 1, 0)
+        title.Position = UDim2.new(0, 10, 0, 0)
+        title.BackgroundTransparency = 1
+        title.Font = Enum.Font.GothamMedium
+        title.TextSize = 10.5
+        title.TextColor3 = THEME.TEXT_MAIN
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Text = labelText
+        title.Parent = container
+
+        local btnContainer = Instance.new("Frame")
+        btnContainer.Size = UDim2.new(0.65, -16, 0, 28)
+        btnContainer.Position = UDim2.new(0.35, 8, 0.5, -14)
+        btnContainer.BackgroundTransparency = 1
+        btnContainer.Parent = container
+
+        local bLayout = Instance.new("UIListLayout")
+        bLayout.FillDirection = Enum.FillDirection.Horizontal
+        bLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        bLayout.Padding = UDim.new(0, 4)
+        bLayout.Parent = btnContainer
+
+        local btns: { [string]: TextButton } = {}
+        local function UpdateSegmentUI(activeVal: string)
+            for id, b in pairs(btns) do
+                local isActive = (id == activeVal)
+                b.BackgroundColor3 = isActive and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+                b.TextColor3 = isActive and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            end
+        end
+
+        local currentVal = tostring(SimConfig.Get(configKey) or options[1].Id)
+        for _, opt in ipairs(options) do
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(0, 78, 1, 0)
+            b.BackgroundColor3 = (opt.Id == currentVal) and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 9.5
+            b.TextColor3 = (opt.Id == currentVal) and THEME.TEXT_MAIN or THEME.TEXT_MUTED
+            b.Text = opt.Label
+            b.Parent = btnContainer
+            AddCorner(b, 4)
+            AddStroke(b, THEME.BORDER, 1)
+
+            btns[opt.Id] = b
+            b.MouseButton1Click:Connect(function()
+                SimConfig.Set(configKey, opt.Id)
+                UpdateSegmentUI(opt.Id)
+            end)
+        end
+
+        SimConfig.Subscribe(configKey, function(val)
+            UpdateSegmentUI(tostring(val))
         end)
 
         return container
@@ -648,55 +819,215 @@ function DashboardGUI.Create(): ScreenGui
         l.TextColor3 = color or THEME.TEXT_MUTED
         l.TextXAlignment = Enum.TextXAlignment.Left
         l.TextYAlignment = Enum.TextYAlignment.Center
-        l.TextWrapped = true
         l.Text = "  " .. text
         l.Parent = parent
-        AddCorner(l, 5)
+        AddCorner(l, 4)
         AddStroke(l, THEME.BORDER, 1)
         return l
     end
 
     -- =========================================================================
-    -- [ABA 1] MIRA SIMULADA (AIM SIMULATION)
+    -- [ABA 1] DASHBOARD / VISÃO GERAL (DASHBOARD)
+    -- =========================================================================
+    local pageDash = pages["Dashboard"]
+
+    CreateSectionHeader(pageDash, "VISÃO GERAL DO SIMULADOR E MÉTRICAS OPERACIONAIS")
+
+    -- Grid de 4 Cards KPI
+    local kpiGrid = Instance.new("Frame")
+    kpiGrid.Size = UDim2.new(1, 0, 0, 72)
+    kpiGrid.BackgroundTransparency = 1
+    kpiGrid.Parent = pageDash
+
+    local kpiLayout = Instance.new("UIGridLayout")
+    kpiLayout.CellSize = UDim2.new(0.238, 0, 1, 0)
+    kpiLayout.CellPadding = UDim2.new(0.016, 0, 0, 0)
+    kpiLayout.Parent = kpiGrid
+
+    local function MakeKpiCard(title: string, defaultVal: string, tagKey: string, icon: string): (Frame, TextLabel)
+        local card = Instance.new("Frame")
+        card.BackgroundColor3 = THEME.BG_INPUT
+        card.Parent = kpiGrid
+        AddCorner(card, 6)
+        AddStroke(card, THEME.BORDER, 1)
+
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1, -12, 0, 18)
+        t.Position = UDim2.new(0, 8, 0, 6)
+        t.BackgroundTransparency = 1
+        t.Font = Enum.Font.GothamBold
+        t.TextSize = 9.5
+        t.TextColor3 = THEME.TEXT_MUTED
+        t.TextXAlignment = Enum.TextXAlignment.Left
+        t.Text = icon .. " " .. title
+        t.Parent = card
+
+        local v = Instance.new("TextLabel")
+        v.Size = UDim2.new(1, -12, 0, 24)
+        v.Position = UDim2.new(0, 8, 0, 26)
+        v.BackgroundTransparency = 1
+        v.Font = Enum.Font.GothamBold
+        v.TextSize = 13
+        v.TextColor3 = THEME.TEXT_MAIN
+        v.TextXAlignment = Enum.TextXAlignment.Left
+        v.Text = defaultVal
+        v.Parent = card
+
+        local s = Instance.new("TextLabel")
+        s.Size = UDim2.new(1, -12, 0, 14)
+        s.Position = UDim2.new(0, 8, 0, 50)
+        s.BackgroundTransparency = 1
+        s.Font = Enum.Font.Code
+        s.TextSize = 8.5
+        s.TextColor3 = THEME.SUCCESS
+        s.TextXAlignment = Enum.TextXAlignment.Left
+        s.Text = "● OPERACIONAL"
+        s.Parent = card
+
+        TelemetryLabels[tagKey] = v
+        TelemetryLabels[tagKey .. "_Status"] = s
+        return card, v
+    end
+
+    MakeKpiCard("PIPELINE MESTRE", "ATIVO", "Dash_SimStatus", "⚙️")
+    MakeKpiCard("ALVO SINTÉTICO", "NENHUM", "Dash_TargetName", "🎯")
+    MakeKpiCard("MOTOR IA", "HEALTHY", "Dash_HealthStatus", "🧠")
+    MakeKpiCard("PERFORMANCE", "60 FPS", "Dash_FpsCounter", "⚡")
+
+    CreateSectionHeader(pageDash, "AÇÕES RÁPIDAS DE SIMULAÇÃO")
+
+    local quickActionGrid = Instance.new("Frame")
+    quickActionGrid.Size = UDim2.new(1, 0, 0, 36)
+    quickActionGrid.BackgroundTransparency = 1
+    quickActionGrid.Parent = pageDash
+
+    local qaLayout = Instance.new("UIGridLayout")
+    qaLayout.CellSize = UDim2.new(0.238, 0, 1, 0)
+    qaLayout.CellPadding = UDim2.new(0.016, 0, 0, 0)
+    qaLayout.Parent = quickActionGrid
+
+    local function MakeQuickActionButton(text: string, color: Color3, onClick: () -> ())
+        local b = Instance.new("TextButton")
+        b.BackgroundColor3 = color
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 10
+        b.TextColor3 = THEME.TEXT_MAIN
+        b.Text = text
+        b.Parent = quickActionGrid
+        AddCorner(b, 5)
+        AddStroke(b, THEME.BORDER_LIGHT, 1)
+        b.MouseButton1Click:Connect(onClick)
+    end
+
+    MakeQuickActionButton("🎯 Spawnar Alvo", THEME.ACCENT_PURPLE, function()
+        if DashboardGUI.OnSpawnTestDummy then DashboardGUI.OnSpawnTestDummy() end
+    end)
+    MakeQuickActionButton("🩺 Diagnóstico Completo", THEME.BG_INPUT, function()
+        if DashboardGUI.OnRunFullDiagnostic then DashboardGUI.OnRunFullDiagnostic() end
+    end)
+    MakeQuickActionButton("⚡ Testar Disparo", THEME.BG_INPUT, function()
+        if DashboardGUI.OnSimulateSilentAimShot then DashboardGUI.OnSimulateSilentAimShot() end
+    end)
+    MakeQuickActionButton("🗑️ Limpar Alvos", THEME.BG_INPUT, function()
+        if DashboardGUI.OnClearTestDummies then DashboardGUI.OnClearTestDummies() end
+    end)
+
+    CreateSectionHeader(pageDash, "ESTADO DOS SUBSISTEMAS DE TESTE")
+
+    local modStatusCard = Instance.new("Frame")
+    modStatusCard.Size = UDim2.new(1, 0, 0, 50)
+    modStatusCard.BackgroundColor3 = THEME.BG_INPUT
+    modStatusCard.Parent = pageDash
+    AddCorner(modStatusCard, 6)
+    AddStroke(modStatusCard, THEME.BORDER, 1)
+
+    local msPad = Instance.new("UIPadding")
+    msPad.PaddingTop = UDim.new(0, 4); msPad.PaddingBottom = UDim.new(0, 4)
+    msPad.PaddingLeft = UDim.new(0, 6); msPad.PaddingRight = UDim.new(0, 6)
+    msPad.Parent = modStatusCard
+
+    local msLayout = Instance.new("UIGridLayout")
+    msLayout.CellSize = UDim2.new(0.24, 0, 1, 0)
+    msLayout.CellPadding = UDim2.new(0.013, 0, 0, 0)
+    msLayout.Parent = modStatusCard
+
+    local function MakeModuleBadge(modName: string, initialStatus: string, labelKey: string)
+        local box = Instance.new("Frame")
+        box.BackgroundColor3 = THEME.BG_WINDOW
+        box.Parent = modStatusCard
+        AddCorner(box, 4)
+        AddStroke(box, THEME.BORDER, 1)
+
+        local t1 = Instance.new("TextLabel")
+        t1.Size = UDim2.new(1, -6, 0, 15)
+        t1.Position = UDim2.new(0, 4, 0, 2)
+        t1.BackgroundTransparency = 1
+        t1.Font = Enum.Font.GothamBold
+        t1.TextSize = 9
+        t1.TextColor3 = THEME.TEXT_MAIN
+        t1.TextXAlignment = Enum.TextXAlignment.Left
+        t1.Text = modName
+        t1.Parent = box
+
+        local t2 = Instance.new("TextLabel")
+        t2.Size = UDim2.new(1, -6, 0, 16)
+        t2.Position = UDim2.new(0, 4, 0, 18)
+        t2.BackgroundTransparency = 1
+        t2.Font = Enum.Font.Code
+        t2.TextSize = 8.5
+        t2.TextColor3 = THEME.SUCCESS
+        t2.TextXAlignment = Enum.TextXAlignment.Left
+        t2.Text = initialStatus
+        t2.Parent = box
+        TelemetryLabels[labelKey] = t2
+    end
+
+    MakeModuleBadge("VectorTracker", "● MONITORANDO", "ModStatus_Tracker")
+    MakeModuleBadge("InstanceDetector", "● ATIVO", "ModStatus_Detector")
+    MakeModuleBadge("DiagnosticAI", "● OPERACIONAL", "ModStatus_Diagnostic")
+    MakeModuleBadge("Silent Aim", "○ PRONTO", "ModStatus_SilentAim")
+
+    -- =========================================================================
+    -- [ABA 2] MIRA SIMULADA (AIM SIMULATION)
     -- =========================================================================
     local pageAim = pages["AimSimulation"]
 
     -- Card Mestre de Ativação
     local masterCard = Instance.new("Frame")
-    masterCard.Size = UDim2.new(1, 0, 0, 60)
+    masterCard.Size = UDim2.new(1, 0, 0, 56)
     masterCard.BackgroundColor3 = THEME.BG_INPUT
     masterCard.Parent = pageAim
     AddCorner(masterCard, 8)
     AddStroke(masterCard, THEME.BORDER, 1)
 
     local masterTitle = Instance.new("TextLabel")
-    masterTitle.Size = UDim2.new(0.65, 0, 0, 22)
+    masterTitle.Size = UDim2.new(0.65, 0, 0, 20)
     masterTitle.Position = UDim2.new(0, 12, 0, 8)
     masterTitle.BackgroundTransparency = 1
     masterTitle.Font = Enum.Font.GothamBold
-    masterTitle.TextSize = 12
+    masterTitle.TextSize = 11.5
     masterTitle.TextColor3 = THEME.TEXT_MAIN
     masterTitle.TextXAlignment = Enum.TextXAlignment.Left
-    masterTitle.Text = "SIMULAÇÃO CINEMÁTICA DE MIRA (AIMBOT)"
+    masterTitle.Text = "SIMULAÇÃO CINEMÁTICA DE MIRA (AIMBOT DEFENSIVO)"
     masterTitle.Parent = masterCard
 
     local masterDesc = Instance.new("TextLabel")
-    masterDesc.Size = UDim2.new(0.65, 0, 0, 20)
-    masterDesc.Position = UDim2.new(0, 12, 0, 30)
+    masterDesc.Size = UDim2.new(0.65, 0, 0, 18)
+    masterDesc.Position = UDim2.new(0, 12, 0, 28)
     masterDesc.BackgroundTransparency = 1
     masterDesc.Font = Enum.Font.GothamMedium
-    masterDesc.TextSize = 10
+    masterDesc.TextSize = 9.5
     masterDesc.TextColor3 = THEME.TEXT_MUTED
     masterDesc.TextXAlignment = Enum.TextXAlignment.Left
-    masterDesc.Text = "Rastreamento preditivo de alvos sintéticos com suavização sem jitter."
+    masterDesc.Text = "Rastreamento preditivo de manequins sintéticos com interpolação estável."
     masterDesc.Parent = masterCard
 
     local masterSwitch = Instance.new("TextButton")
-    masterSwitch.Size = UDim2.new(0, 150, 0, 34)
-    masterSwitch.Position = UDim2.new(1, -162, 0.5, -17)
-    masterSwitch.BackgroundColor3 = SimConfig.Get("SimulationActive") and THEME.ACCENT_RED or THEME.BG_WINDOW
+    masterSwitch.Size = UDim2.new(0, 150, 0, 32)
+    masterSwitch.Position = UDim2.new(1, -162, 0.5, -16)
+    masterSwitch.BackgroundColor3 = SimConfig.Get("SimulationActive") and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
     masterSwitch.Font = Enum.Font.GothamBold
-    masterSwitch.TextSize = 11
+    masterSwitch.TextSize = 10.5
     masterSwitch.TextColor3 = THEME.TEXT_MAIN
     masterSwitch.Text = SimConfig.Get("SimulationActive") and "SIMULAÇÃO: ATIVA" or "SIMULAÇÃO: PAUSADA"
     masterSwitch.Parent = masterCard
@@ -705,220 +1036,83 @@ function DashboardGUI.Create(): ScreenGui
     masterSwitch.MouseButton1Click:Connect(function()
         local nextState = not (SimConfig.Get("SimulationActive") == true)
         SimConfig.Set("SimulationActive", nextState)
-        masterSwitch.BackgroundColor3 = nextState and THEME.ACCENT_RED or THEME.BG_WINDOW
+        masterSwitch.BackgroundColor3 = nextState and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
         masterSwitch.Text = nextState and "SIMULAÇÃO: ATIVA" or "SIMULAÇÃO: PAUSADA"
         DashboardGUI.AddDiagnosticLog("PIPELINE", nextState and "Simulação ativada." or "Simulação pausada.", nextState and "OK" or "WARN")
     end)
 
-    CreateToggleField(pageAim, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"))
-    CreateToggleField(pageAim, "Considerar Jogadores como Alvos (Ambiente Autorizado)", "AllowPlayerTargets", SimConfig.Get("AllowPlayerTargets"))
+    CreateToggleField(pageAim, "Ativar Rastreamento de Mira (Aimbot Ativo)", "AimbotEnabled", SimConfig.Get("AimbotEnabled"), "Ativa o controlador de rotação cinemática no manequim sintético")
+    CreateSegmentedButtons(pageAim, "Modo de Mira", "AimMode", {
+        { Id = "HoldRMB",  Label = "Segurar RMB" },
+        { Id = "Toggle",   Label = "Alternar" },
+        { Id = "AlwaysOn", Label = "Sempre Ativo" },
+    })
+
+    CreateSectionHeader(pageAim, "DINÂMICA CINEMÁTICA & RESPOSTA TEMPORAL")
+    CreateSliderField(pageAim, "Suavização Cinemática (Smoothing)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01, "0.01 = Alta resposta rápida | 0.25 = Transição orgânica ultra-suave")
+    CreateSliderField(pageAim, "Velocidade Angular Máxima (°/s)", "AngularVelocity", 30, 720, SimConfig.Get("AngularVelocity"), 10, "Limite estrito para evitar instabilidade ou oscilação brusca")
+    CreateToggleField(pageAim, "Clamp de Velocidade Angular", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"), "Força clamp estrito em todas as rotações")
+    CreateSliderField(pageAim, "Zona Morta Angular - Deadzone (°)", "AimDeadzoneDeg", 0.0, 5.0, SimConfig.Get("AimDeadzoneDeg") or 0.5, 0.1, "Elimina micro-vibrações (jitter) quando o erro estiver abaixo do limiar")
+    CreateSliderField(pageAim, "Raio do FOV Visual na Tela (Pixels)", "FovRadiusPx", 20, 600, SimConfig.Get("FovRadiusPx"), 5, "Raio do círculo visual centralizado de busca")
+    CreateSliderField(pageAim, "Campo de Visão Angular - FOV (°)", "FOV", 10, 180, SimConfig.Get("FOV"), 1, "Cone esférico tridimensional de busca de entidades")
+    CreateToggleField(pageAim, "Exibir Círculo de FOV na Tela", "ShowFovCircle", SimConfig.Get("ShowFovCircle"))
+
+    CreateSectionHeader(pageAim, "FILTROS E SELEÇÃO DE ALVOS")
     CreateToggleField(pageAim, "Filtrar Somente Alvos com Visada Livre (Visible Only)", "VisibleOnly", SimConfig.Get("VisibleOnly"))
     CreateToggleField(pageAim, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
-    CreateToggleField(pageAim, "Exibir Círculo de FOV na Tela", "ShowFovCircle", SimConfig.Get("ShowFovCircle"))
-    CreateToggleField(pageAim, "Realce Visual de Entidades (Highlights ESP)", "EnableESP", SimConfig.Get("EnableESP"))
-
-    CreateSectionHeader(pageAim, "PARÂMETROS DE RESPOSTA E ALINHAMENTO CINEMÁTICO")
-    CreateSliderField(pageAim, "Campo de Visão (FOV °)", "FOV", 10, 180, SimConfig.Get("FOV"), 1, "Sincronizado opticamente com o retículo circular na tela")
-    CreateSliderField(pageAim, "Coeficiente de Suavização (Lerp)", "Smoothing", 0.01, 1.0, SimConfig.Get("Smoothing"), 0.01, "0.01 = Instantâneo/Snap | 1.00 = Ultra Suave/Cinemático")
-    CreateSliderField(pageAim, "Velocidade Angular Máxima (°/s)", "AngularVelocity", 30, 1200, SimConfig.Get("AngularVelocity"), 10)
-    CreateToggleField(pageAim, "Forçar Limite Estrito de Velocidade Angular (Clamp)", "MaxAngularVelocityClamp", SimConfig.Get("MaxAngularVelocityClamp"))
-    CreateSliderField(pageAim, "Raio Máximo de Atuação (studs)", "VectorRadius", 10, 500, SimConfig.Get("VectorRadius"), 5)
-    CreateSliderField(pageAim, "Tempo de Resposta Simulado (ms)", "ResponseTime", 0, 250, SimConfig.Get("ResponseTime"), 1)
-
-    CreateSectionHeader(pageAim, "MODOS DE ATIVAÇÃO E PRIORIZAÇÃO DE ALVOS")
-    -- Seletor AimMode
-    local aimModeRow = Instance.new("Frame")
-    aimModeRow.Size = UDim2.new(1, 0, 0, 36)
-    aimModeRow.BackgroundColor3 = THEME.BG_INPUT
-    aimModeRow.BackgroundTransparency = 0.5
-    aimModeRow.Parent = pageAim
-    AddCorner(aimModeRow, 6)
-    AddStroke(aimModeRow, THEME.BORDER, 1)
-
-    local aimModeLbl = Instance.new("TextLabel")
-    aimModeLbl.Size = UDim2.new(0, 110, 1, 0)
-    aimModeLbl.Position = UDim2.new(0, 10, 0, 0)
-    aimModeLbl.BackgroundTransparency = 1
-    aimModeLbl.Font = Enum.Font.GothamMedium
-    aimModeLbl.TextSize = 11
-    aimModeLbl.TextColor3 = THEME.TEXT_MAIN
-    aimModeLbl.TextXAlignment = Enum.TextXAlignment.Left
-    aimModeLbl.Text = "Modo de Mira:"
-    aimModeLbl.Parent = aimModeRow
-
-    local aimModeGrid = Instance.new("Frame")
-    aimModeGrid.Size = UDim2.new(1, -125, 0, 24)
-    aimModeGrid.Position = UDim2.new(0, 115, 0.5, -12)
-    aimModeGrid.BackgroundTransparency = 1
-    aimModeGrid.Parent = aimModeRow
-
-    local aimModeLayout = Instance.new("UIGridLayout")
-    aimModeLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
-    aimModeLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
-    aimModeLayout.Parent = aimModeGrid
-
-    local aimModeButtons: { [string]: TextButton } = {}
-    local aimModeOptions = { { Id = "HoldRMB", Label = "Segurar RMB" }, { Id = "Toggle", Label = "Alternar" }, { Id = "AlwaysOn", Label = "Sempre Ativo" } }
-    local function UpdateAimModeUI(activeId: string)
-        for id, btn in pairs(aimModeButtons) do
-            local isSel = (id == activeId)
-            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
-            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        end
-    end
-    for _, opt in ipairs(aimModeOptions) do
-        local aBtn = Instance.new("TextButton")
-        local isCurrent = (SimConfig.Get("AimMode") or "HoldRMB") == opt.Id
-        aBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
-        aBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        aBtn.Font = Enum.Font.GothamBold
-        aBtn.TextSize = 10
-        aBtn.Text = opt.Label
-        aBtn.Parent = aimModeGrid
-        AddCorner(aBtn, 4)
-        AddStroke(aBtn, THEME.BORDER, 1)
-        aimModeButtons[opt.Id] = aBtn
-        aBtn.MouseButton1Click:Connect(function()
-            SimConfig.Set("AimMode", opt.Id)
-            UpdateAimModeUI(opt.Id)
-            DashboardGUI.AddDiagnosticLog("AIM_MODE", "Modo alterado: " .. opt.Label, "INFO")
-        end)
-    end
-
-    CreateToggleField(pageAim, "Segurar Botão Direito para Focar (Hold to Aim)", "HoldToAim", SimConfig.Get("HoldToAim"))
-
-    -- Prioridade de Alvos
-    local prioRow = Instance.new("Frame")
-    prioRow.Size = UDim2.new(1, 0, 0, 36)
-    prioRow.BackgroundColor3 = THEME.BG_INPUT
-    prioRow.BackgroundTransparency = 0.5
-    prioRow.Parent = pageAim
-    AddCorner(prioRow, 6)
-    AddStroke(prioRow, THEME.BORDER, 1)
-
-    local prioLbl = Instance.new("TextLabel")
-    prioLbl.Size = UDim2.new(0, 110, 1, 0)
-    prioLbl.Position = UDim2.new(0, 10, 0, 0)
-    prioLbl.BackgroundTransparency = 1
-    prioLbl.Font = Enum.Font.GothamMedium
-    prioLbl.TextSize = 11
-    prioLbl.TextColor3 = THEME.TEXT_MAIN
-    prioLbl.TextXAlignment = Enum.TextXAlignment.Left
-    prioLbl.Text = "Prioridade:"
-    prioLbl.Parent = prioRow
-
-    local prioGrid = Instance.new("Frame")
-    prioGrid.Size = UDim2.new(1, -125, 0, 24)
-    prioGrid.Position = UDim2.new(0, 115, 0.5, -12)
-    prioGrid.BackgroundTransparency = 1
-    prioGrid.Parent = prioRow
-
-    local prioLayout = Instance.new("UIGridLayout")
-    prioLayout.CellSize = UDim2.new(0.31, 0, 1, 0)
-    prioLayout.CellPadding = UDim2.new(0.035, 0, 0, 0)
-    prioLayout.Parent = prioGrid
-
-    local prioButtons: { [string]: TextButton } = {}
-    local prioOptions = { { Id = "Crosshair", Label = "Mira" }, { Id = "Distance", Label = "Distância" }, { Id = "LowestHealth", Label = "Menor Vida" } }
-    local function UpdatePrioUI(activeId: string)
-        for id, btn in pairs(prioButtons) do
-            local isSel = (id == activeId)
-            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
-            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        end
-    end
-    for _, opt in ipairs(prioOptions) do
-        local pBtn = Instance.new("TextButton")
-        local isCurrent = (SimConfig.Get("TargetPriority") or "Crosshair") == opt.Id
-        pBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
-        pBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        pBtn.Font = Enum.Font.GothamBold
-        pBtn.TextSize = 10
-        pBtn.Text = opt.Label
-        pBtn.Parent = prioGrid
-        AddCorner(pBtn, 4)
-        AddStroke(pBtn, THEME.BORDER, 1)
-        prioButtons[opt.Id] = pBtn
-        pBtn.MouseButton1Click:Connect(function()
-            SimConfig.Set("TargetPriority", opt.Id)
-            UpdatePrioUI(opt.Id)
-            DashboardGUI.AddDiagnosticLog("TARGETING", "Prioridade alterada: " .. opt.Label, "INFO")
-        end)
-    end
-
-    CreateSliderField(pageAim, "Persistência no Alvo (Target Stickiness s)", "TargetStickiness", 0.05, 1.0, SimConfig.Get("TargetStickiness"), 0.05)
-    CreateToggleField(pageAim, "Simular Micro-Variações Orgânicas (Perlin Jitter)", "SimulateJitter", SimConfig.Get("SimulateJitter"))
-    CreateSliderField(pageAim, "Intensidade do Jitter (%)", "Intensity", 0, 100, SimConfig.Get("Intensity"), 5)
-    CreateSliderField(pageAim, "Curva de Aceleração (Hermite Exponent)", "AccelerationCurve", 0.2, 3.0, SimConfig.Get("AccelerationCurve"), 0.05)
-
-    CreateSectionHeader(pageAim, "REGIÃO ANATÔMICA PRIORITÁRIA (HITBOX)")
-    local boneRow = Instance.new("Frame")
-    boneRow.Size = UDim2.new(1, 0, 0, 36)
-    boneRow.BackgroundColor3 = THEME.BG_INPUT
-    boneRow.BackgroundTransparency = 0.5
-    boneRow.Parent = pageAim
-    AddCorner(boneRow, 6)
-    AddStroke(boneRow, THEME.BORDER, 1)
-
-    local boneLbl = Instance.new("TextLabel")
-    boneLbl.Size = UDim2.new(0, 110, 1, 0)
-    boneLbl.Position = UDim2.new(0, 10, 0, 0)
-    boneLbl.BackgroundTransparency = 1
-    boneLbl.Font = Enum.Font.GothamMedium
-    boneLbl.TextSize = 11
-    boneLbl.TextColor3 = THEME.TEXT_MAIN
-    boneLbl.TextXAlignment = Enum.TextXAlignment.Left
-    boneLbl.Text = "Região Ativa:"
-    boneLbl.Parent = boneRow
-
-    local boneGrid = Instance.new("Frame")
-    boneGrid.Size = UDim2.new(1, -125, 0, 24)
-    boneGrid.Position = UDim2.new(0, 115, 0.5, -12)
-    boneGrid.BackgroundTransparency = 1
-    boneGrid.Parent = boneRow
-
-    local boneLayout = Instance.new("UIGridLayout")
-    boneLayout.CellSize = UDim2.new(0.23, 0, 1, 0)
-    boneLayout.CellPadding = UDim2.new(0.026, 0, 0, 0)
-    boneLayout.Parent = boneGrid
-
-    local boneButtons: { [string]: TextButton } = {}
-    local boneOptions = { { Id = "Head", Label = "Cabeça" }, { Id = "Torso", Label = "Tronco" }, { Id = "Arms", Label = "Braços" }, { Id = "Legs", Label = "Pernas" } }
-    local function UpdateBoneUI(activeId: string)
-        for id, btn in pairs(boneButtons) do
-            local isSel = (id == activeId)
-            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
-            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        end
-    end
-    for _, opt in ipairs(boneOptions) do
-        local bBtn = Instance.new("TextButton")
-        local isCurrent = (SimConfig.Get("TargetRegion") or "Head") == opt.Id
-        bBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
-        bBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        bBtn.Font = Enum.Font.GothamBold
-        bBtn.TextSize = 10
-        bBtn.Text = opt.Label
-        bBtn.Parent = boneGrid
-        AddCorner(bBtn, 4)
-        AddStroke(bBtn, THEME.BORDER, 1)
-        boneButtons[opt.Id] = bBtn
-        bBtn.MouseButton1Click:Connect(function()
-            SimConfig.Set("TargetRegion", opt.Id)
-            UpdateBoneUI(opt.Id)
-            DashboardGUI.AddDiagnosticLog("HITBOX", "Região anatômica: " .. opt.Label, "INFO")
-        end)
-    end
+    CreateToggleField(pageAim, "Considerar Jogadores como Alvos (Ambiente Autorizado)", "AllowPlayerTargets", SimConfig.Get("AllowPlayerTargets"))
+    CreateSegmentedButtons(pageAim, "Região do Alvo", "TargetRegion", {
+        { Id = "Head",  Label = "Cabeça" },
+        { Id = "Torso", Label = "Tronco" },
+        { Id = "Arms",  Label = "Braços" },
+        { Id = "Legs",  Label = "Pernas" },
+    })
 
     -- =========================================================================
-    -- [ABA 2] DISPAROS SIMULADOS (SILENT AIM)
+    -- [ABA 3] PLAYER DE TESTE & DISPAROS (SILENT AIM)
     -- =========================================================================
     local pageSilent = pages["SilentAim"]
 
+    CreateSectionHeader(pageSilent, "GERENCIAMENTO DO MANEQUIM SINTÉTICO")
+    local dummyActionRow = Instance.new("Frame")
+    dummyActionRow.Size = UDim2.new(1, 0, 0, 34)
+    dummyActionRow.BackgroundTransparency = 1
+    dummyActionRow.Parent = pageSilent
+
+    local spawnDummyBtn = Instance.new("TextButton")
+    spawnDummyBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    spawnDummyBtn.Position = UDim2.new(0, 0, 0, 0)
+    spawnDummyBtn.BackgroundColor3 = THEME.ACCENT_PURPLE
+    spawnDummyBtn.Font = Enum.Font.GothamBold
+    spawnDummyBtn.TextSize = 10.5
+    spawnDummyBtn.TextColor3 = THEME.TEXT_MAIN
+    spawnDummyBtn.Text = "🎯 SPAWNAR MANEQUIM SINTÉTICO"
+    spawnDummyBtn.Parent = dummyActionRow
+    AddCorner(spawnDummyBtn, 6)
+    AddStroke(spawnDummyBtn, THEME.BORDER_LIGHT, 1)
+    spawnDummyBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnSpawnTestDummy then DashboardGUI.OnSpawnTestDummy() end
+    end)
+
+    local clearDummyBtn = Instance.new("TextButton")
+    clearDummyBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    clearDummyBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    clearDummyBtn.BackgroundColor3 = THEME.BG_INPUT
+    clearDummyBtn.Font = Enum.Font.GothamBold
+    clearDummyBtn.TextSize = 10.5
+    clearDummyBtn.TextColor3 = THEME.TEXT_MAIN
+    clearDummyBtn.Text = "🗑️ LIMPAR TODOS OS DUMMIES"
+    clearDummyBtn.Parent = dummyActionRow
+    AddCorner(clearDummyBtn, 6)
+    AddStroke(clearDummyBtn, THEME.BORDER, 1)
+    clearDummyBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnClearTestDummies then DashboardGUI.OnClearTestDummies() end
+    end)
+
     CreateSectionHeader(pageSilent, "SIMULAÇÃO DE DISPAROS DESACOPLADOS (SILENT AIM)")
-    CreateToggleField(pageSilent, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"))
+    CreateToggleField(pageSilent, "Ativar Simulação de Silent Aim (Vetor Desacoplado)", "SilentAimEnabled", SimConfig.Get("SilentAimEnabled"), "Redireciona vetores balísticos sem mover a câmera física do observador")
     CreateSliderField(pageSilent, "Silent Aim - Campo de Redirecionamento (FOV °)", "SilentAimFOV", 5, 90, SimConfig.Get("SilentAimFOV"), 1, "Cone angular máximo permitido para redirecionamento do tiro")
-    CreateSliderField(pageSilent, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5, "100% = Acerto determinístico | <100% = Dispersão probabilística")
+    CreateSliderField(pageSilent, "Probabilidade de Acerto do Silent Aim (%)", "SilentAimHitChance", 10, 100, SimConfig.Get("SilentAimHitChance"), 5, "100% = Acerto determinístico | <100% = Dispersão probabilística de teste")
     CreateToggleField(pageSilent, "Exibir Traçador 3D do Vetor de Disparo (Tracer)", "SilentAimTracer", SimConfig.Get("SilentAimTracer"))
 
     -- Card com Pipeline em 5 Etapas e Telemetria de Colisão
@@ -951,270 +1145,208 @@ function DashboardGUI.Create(): ScreenGui
     pSteps.Text = "[1] RECEBIDO → [2] VALIDADO → [3] TRAJETÓRIA → [4] COLISÃO FÍSICA → [5] RESULTADO"
     pSteps.Parent = pipelineCard
 
-    -- Linha 1: Estado do Módulo e Etapa Atual
     local pStatus1 = Instance.new("TextLabel")
     pStatus1.Size = UDim2.new(0.5, -10, 0, 16)
     pStatus1.Position = UDim2.new(0, 8, 0, 44)
     pStatus1.BackgroundTransparency = 1
     pStatus1.Font = Enum.Font.GothamMedium
-    pStatus1.TextSize = 10
-    pStatus1.TextColor3 = THEME.TEXT_MUTED
+    pStatus1.TextSize = 9.5
+    pStatus1.TextColor3 = THEME.TEXT_MAIN
     pStatus1.TextXAlignment = Enum.TextXAlignment.Left
-    pStatus1.Text = "Módulo: CARREGADO"
+    pStatus1.Text = "Módulo: ○ DESATIVADO"
     pStatus1.Parent = pipelineCard
     TelemetryLabels["SilentAimStatus"] = pStatus1
 
-    local pCurrentStage = Instance.new("TextLabel")
-    pCurrentStage.Size = UDim2.new(0.5, -10, 0, 16)
-    pCurrentStage.Position = UDim2.new(0.5, 0, 0, 44)
-    pCurrentStage.BackgroundTransparency = 1
-    pCurrentStage.Font = Enum.Font.GothamMedium
-    pCurrentStage.TextSize = 10
-    pCurrentStage.TextColor3 = THEME.INFO
-    pCurrentStage.TextXAlignment = Enum.TextXAlignment.Right
-    pCurrentStage.Text = "Etapa: PRONTO"
-    pCurrentStage.Parent = pipelineCard
-    TelemetryLabels["SilentAimStage"] = pCurrentStage
-
-    -- Linha 2: Resultado do Último Disparo
     local pStatus2 = Instance.new("TextLabel")
-    pStatus2.Size = UDim2.new(1, -16, 0, 18)
-    pStatus2.Position = UDim2.new(0, 8, 0, 64)
+    pStatus2.Size = UDim2.new(0.5, -10, 0, 16)
+    pStatus2.Position = UDim2.new(0.5, 0, 0, 44)
     pStatus2.BackgroundTransparency = 1
-    pStatus2.Font = Enum.Font.GothamBold
-    pStatus2.TextSize = 10.5
+    pStatus2.Font = Enum.Font.GothamMedium
+    pStatus2.TextSize = 9.5
     pStatus2.TextColor3 = THEME.TEXT_MUTED
     pStatus2.TextXAlignment = Enum.TextXAlignment.Left
-    pStatus2.Text = "Último Disparo: NENHUM DISPARO EFETUADO"
+    pStatus2.Text = "Etapa: [0/5] NENHUM DISPARO"
     pStatus2.Parent = pipelineCard
-    TelemetryLabels["LastShotStatus"] = pStatus2
+    TelemetryLabels["SilentAimStage"] = pStatus2
 
-    -- Linha 3: Detalhes Físicos / Impacto
+    local pShotStatus = Instance.new("TextLabel")
+    pShotStatus.Size = UDim2.new(1, -16, 0, 16)
+    pShotStatus.Position = UDim2.new(0, 8, 0, 62)
+    pShotStatus.BackgroundTransparency = 1
+    pShotStatus.Font = Enum.Font.GothamBold
+    pShotStatus.TextSize = 9.5
+    pShotStatus.TextColor3 = THEME.TEXT_MUTED
+    pShotStatus.TextXAlignment = Enum.TextXAlignment.Left
+    pShotStatus.Text = "Último Disparo: NENHUM REGISTRO"
+    pShotStatus.Parent = pipelineCard
+    TelemetryLabels["LastShotStatus"] = pShotStatus
+
     local pDetails = Instance.new("TextLabel")
     pDetails.Size = UDim2.new(1, -16, 0, 16)
-    pDetails.Position = UDim2.new(0, 8, 0, 84)
+    pDetails.Position = UDim2.new(0, 8, 0, 80)
     pDetails.BackgroundTransparency = 1
     pDetails.Font = Enum.Font.Code
-    pDetails.TextSize = 9
+    pDetails.TextSize = 8.5
     pDetails.TextColor3 = THEME.TEXT_MUTED
     pDetails.TextXAlignment = Enum.TextXAlignment.Left
-    pDetails.Text = "Impacto: — | Parte: — | Desvio: — | Distância: —"
+    pDetails.Text = "Impacto: — | Parte: — | Desvio: 0.0° | Dist: —"
     pDetails.Parent = pipelineCard
     TelemetryLabels["SilentAimDetails"] = pDetails
 
-    -- Linha 4: Causa da Falha / Diagnóstico
-    local pFailureReason = Instance.new("TextLabel")
-    pFailureReason.Size = UDim2.new(1, -16, 0, 16)
-    pFailureReason.Position = UDim2.new(0, 8, 0, 102)
-    pFailureReason.BackgroundTransparency = 1
-    pFailureReason.Font = Enum.Font.GothamMedium
-    pFailureReason.TextSize = 9
-    pFailureReason.TextColor3 = THEME.TEXT_MUTED
-    pFailureReason.TextXAlignment = Enum.TextXAlignment.Left
-    pFailureReason.Text = "Diagnóstico: Aguardando execução do teste funcional."
-    pFailureReason.Parent = pipelineCard
-    TelemetryLabels["SilentAimReason"] = pFailureReason
+    local pReason = Instance.new("TextLabel")
+    pReason.Size = UDim2.new(1, -16, 0, 18)
+    pReason.Position = UDim2.new(0, 8, 0, 98)
+    pReason.BackgroundTransparency = 1
+    pReason.Font = Enum.Font.GothamMedium
+    pReason.TextSize = 9
+    pReason.TextColor3 = THEME.TEXT_MUTED
+    pReason.TextXAlignment = Enum.TextXAlignment.Left
+    pReason.Text = "Diagnóstico: Pronto para testes. Clique no botão de disparo abaixo."
+    pReason.Parent = pipelineCard
+    TelemetryLabels["SilentAimReason"] = pReason
 
-    -- Linha de Ações Principais (Disparo de Teste + Spawn Dummy com Debounce)
-    local shotActionRow = Instance.new("Frame")
-    shotActionRow.Size = UDim2.new(1, 0, 0, 36)
-    shotActionRow.BackgroundTransparency = 1
-    shotActionRow.Parent = pageSilent
-
-    local isShotTesting = false
-    local testShotBtn = Instance.new("TextButton")
-    testShotBtn.Size = UDim2.new(0.68, -4, 1, 0)
-    testShotBtn.Position = UDim2.new(0, 0, 0, 0)
-    testShotBtn.BackgroundColor3 = THEME.ACCENT_RED
-    testShotBtn.TextColor3 = THEME.TEXT_MAIN
-    testShotBtn.Font = Enum.Font.GothamBold
-    testShotBtn.TextSize = 10.5
-    testShotBtn.Text = "🎯 DISPARAR TESTE SILENT AIM (5 ETAPAS)"
-    testShotBtn.Parent = shotActionRow
-    AddCorner(testShotBtn, 6)
-    AddStroke(testShotBtn, THEME.BORDER_LIGHT, 1)
-
-    local spawnDummyBtn = Instance.new("TextButton")
-    spawnDummyBtn.Size = UDim2.new(0.32, -4, 1, 0)
-    spawnDummyBtn.Position = UDim2.new(0.68, 4, 0, 0)
-    spawnDummyBtn.BackgroundColor3 = THEME.BG_INPUT
-    spawnDummyBtn.TextColor3 = THEME.TEXT_MAIN
-    spawnDummyBtn.Font = Enum.Font.GothamBold
-    spawnDummyBtn.TextSize = 10
-    spawnDummyBtn.Text = "🤖 SPAWN DUMMY"
-    spawnDummyBtn.Parent = shotActionRow
-    AddCorner(spawnDummyBtn, 6)
-    AddStroke(spawnDummyBtn, THEME.BORDER, 1)
-
-    testShotBtn.MouseButton1Click:Connect(function()
-        if isShotTesting then return end
-        isShotTesting = true
-        testShotBtn.Text = "⏳ EXECUTANDO PIPELINE (5 ETAPAS)..."
-        testShotBtn.BackgroundColor3 = THEME.BORDER
-        task.defer(function()
-            if DashboardGUI.OnSimulateSilentAimShot then
-                DashboardGUI.OnSimulateSilentAimShot()
-            end
-            task.wait(0.35)
-            testShotBtn.Text = "🎯 DISPARAR TESTE SILENT AIM (5 ETAPAS)"
-            testShotBtn.BackgroundColor3 = THEME.ACCENT_RED
-            isShotTesting = false
-        end)
-    end)
-
-    spawnDummyBtn.MouseButton1Click:Connect(function()
-        if DashboardGUI.OnSpawnTestDummy then
-            DashboardGUI.OnSpawnTestDummy()
-        end
-    end)
-
-    -- Grade de Cenários Reproduzíveis de Disparo
-    CreateSectionHeader(pageSilent, "CENÁRIOS REPRODUZÍVEIS DE DISPARO (TESTES FUNCIONAIS)")
+    CreateSectionHeader(pageSilent, "EXECUÇÃO DE CENÁRIOS DE DISPARO DE TESTE")
     local shotScenarioGrid = Instance.new("Frame")
     shotScenarioGrid.Size = UDim2.new(1, 0, 0, 0)
     shotScenarioGrid.AutomaticSize = Enum.AutomaticSize.Y
     shotScenarioGrid.BackgroundTransparency = 1
     shotScenarioGrid.Parent = pageSilent
 
-    local ssgLayout = Instance.new("UIGridLayout")
-    ssgLayout.CellSize = UDim2.new(0.485, 0, 0, 28)
-    ssgLayout.CellPadding = UDim2.new(0.03, 0, 0, 6)
-    ssgLayout.Parent = shotScenarioGrid
+    local sscLayout = Instance.new("UIGridLayout")
+    sscLayout.CellSize = UDim2.new(0, 150, 0, 26)
+    sscLayout.CellPadding = UDim2.new(0, 6, 0, 6)
+    sscLayout.Parent = shotScenarioGrid
 
-    for _, sc in ipairs(ScenarioRunner.ShotScenarios) do
-        local scBtn = Instance.new("TextButton")
-        scBtn.BackgroundColor3 = THEME.BG_INPUT
-        scBtn.Font = Enum.Font.GothamMedium
-        scBtn.TextSize = 9.5
-        scBtn.TextColor3 = THEME.TEXT_MAIN
-        scBtn.Text = "▶ " .. sc.Label
-        scBtn.Parent = shotScenarioGrid
-        AddCorner(scBtn, 5)
-        AddStroke(scBtn, THEME.BORDER, 1)
-
-        scBtn.MouseButton1Click:Connect(function()
-            if isShotTesting then return end
-            isShotTesting = true
-            scBtn.TextColor3 = THEME.INFO
-            task.defer(function()
-                if DashboardGUI.OnRunShotScenario then
-                    DashboardGUI.OnRunShotScenario(sc.Id)
-                end
-                task.wait(0.35)
-                scBtn.TextColor3 = THEME.TEXT_MAIN
-                isShotTesting = false
-            end)
+    local function MakeScenarioButton(label: string, id: string)
+        local b = Instance.new("TextButton")
+        b.BackgroundColor3 = THEME.BG_INPUT
+        b.Font = Enum.Font.GothamMedium
+        b.TextSize = 9.5
+        b.TextColor3 = THEME.TEXT_MAIN
+        b.Text = "▶ " .. label
+        b.Parent = shotScenarioGrid
+        AddCorner(b, 5)
+        AddStroke(b, THEME.BORDER, 1)
+        b.MouseButton1Click:Connect(function()
+            if DashboardGUI.OnRunShotScenario then
+                DashboardGUI.OnRunShotScenario(id)
+            end
         end)
     end
 
+    for _, sc in ipairs(ScenarioRunner.ShotScenarios) do
+        MakeScenarioButton(sc.Label, sc.Id)
+    end
+
     -- =========================================================================
-    -- [ABA 3] BALÍSTICA (BALLISTICS & PHYSICS)
+    -- [ABA 4] ESP DE TESTE (ESP & ENTITY VISUALIZATION)
+    -- =========================================================================
+    local pageESP = pages["ESP"]
+
+    CreateSectionHeader(pageESP, "REALCE VISUAL DE ENTIDADES SINTÉTICAS (ESP CHAMS & TAGS 3D)")
+    CreateToggleField(pageESP, "Ativar Realce Visual Geral (Enable ESP)", "EnableESP", SimConfig.Get("EnableESP"), "Ativa o contêiner de renderização de destaques visuais")
+    CreateToggleField(pageESP, "Exibir Tags 3D Flutuantes (BillboardGui)", "ShowTargetTags", SimConfig.Get("ShowTargetTags") ~= false, "Renderiza nome, distância em studs, linha de visada (LOS) e vida sobre o manequim")
+    CreateSliderField(pageESP, "Alcance Máximo de Renderização do ESP (studs)", "EspMaxDistance", 50, 1000, SimConfig.Get("EspMaxDistance") or 500, 25, "Alvos além desta distância não consumirão processamento de realce")
+    CreateToggleField(pageESP, "Ocultar Marcadores se Ocluído (Visible Only)", "VisibleOnly", SimConfig.Get("VisibleOnly"))
+    CreateToggleField(pageESP, "Ignorar Aliados da Mesma Equipe (Team Check)", "TeamCheck", SimConfig.Get("TeamCheck"))
+
+    local espInfoCard = Instance.new("Frame")
+    espInfoCard.Size = UDim2.new(1, 0, 0, 72)
+    espInfoCard.BackgroundColor3 = THEME.BG_INPUT
+    espInfoCard.Parent = pageESP
+    AddCorner(espInfoCard, 6)
+    AddStroke(espInfoCard, THEME.BORDER, 1)
+
+    local espInfoTitle = Instance.new("TextLabel")
+    espInfoTitle.Size = UDim2.new(1, -16, 0, 18)
+    espInfoTitle.Position = UDim2.new(0, 8, 0, 6)
+    espInfoTitle.BackgroundTransparency = 1
+    espInfoTitle.Font = Enum.Font.GothamBold
+    espInfoTitle.TextSize = 10
+    espInfoTitle.TextColor3 = THEME.ACCENT_PURPLE
+    espInfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+    espInfoTitle.Text = "ANATOMIA DAS TAGS 3D DE DEPURAÇÃO:"
+    espInfoTitle.Parent = espInfoCard
+
+    local espInfoBody = Instance.new("TextLabel")
+    espInfoBody.Size = UDim2.new(1, -16, 0, 40)
+    espInfoBody.Position = UDim2.new(0, 8, 0, 26)
+    espInfoBody.BackgroundTransparency = 1
+    espInfoBody.Font = Enum.Font.GothamMedium
+    espInfoBody.TextSize = 9.5
+    espInfoBody.TextColor3 = THEME.TEXT_MAIN
+    espInfoBody.TextXAlignment = Enum.TextXAlignment.Left
+    espInfoBody.TextWrapped = true
+    espInfoBody.Text = "• Título: [Nome do Alvo] [Pivot / Cabeça]\n• Detalhes: [VISIBLE / BLOCKED] em Verde/Vermelho | [Distância studs] | [Vida HP]\n• Quota Estrita: Máximo 16 instâncias de Highlights para estabilidade a 60+ FPS."
+    espInfoBody.Parent = espInfoCard
+
+    -- =========================================================================
+    -- [ABA 5] BALÍSTICA & FÍSICA (BALLISTICS)
     -- =========================================================================
     local pageBallistics = pages["Ballistics"]
 
-    CreateSectionHeader(pageBallistics, "FÍSICA BALÍSTICA E TRAJETÓRIA DE PROJÉTEIS")
+    CreateSectionHeader(pageBallistics, "MODELAGEM BALÍSTICA E TRAJETÓRIA FÍSICA")
+    CreateSegmentedButtons(pageBallistics, "Modelo Balístico", "ProjectileType", {
+        { Id = "Physics", Label = "Físico (Gravidade/Arco)" },
+        { Id = "Instant", Label = "Instantâneo (Hitscan)" },
+    })
+    CreateSliderField(pageBallistics, "Velocidade Inicial do Projétil (studs/s)", "ProjectileSpeed", 100, 5000, SimConfig.Get("ProjectileSpeed"), 50, "Velocidade inicial de saída do cano para cálculo de tempo de voo")
+    CreateSliderField(pageBallistics, "Aceleração Gravitacional (studs/s²)", "ProjectileGravity", 0, 300, SimConfig.Get("ProjectileGravity"), 5, "Gravidade aplicada ao projétil. Padrão do Roblox Studio = 196.2 studs/s²")
 
-    -- Seletor de Modelo Balístico
-    local projTypeRow = Instance.new("Frame")
-    projTypeRow.Size = UDim2.new(1, 0, 0, 36)
-    projTypeRow.BackgroundColor3 = THEME.BG_INPUT
-    projTypeRow.BackgroundTransparency = 0.5
-    projTypeRow.Parent = pageBallistics
-    AddCorner(projTypeRow, 6)
-    AddStroke(projTypeRow, THEME.BORDER, 1)
+    local robloxPresetBtn = Instance.new("TextButton")
+    robloxPresetBtn.Size = UDim2.new(0, 200, 0, 24)
+    robloxPresetBtn.BackgroundColor3 = THEME.BG_INPUT
+    robloxPresetBtn.Font = Enum.Font.GothamBold
+    robloxPresetBtn.TextSize = 9.5
+    robloxPresetBtn.TextColor3 = THEME.ACCENT_PURPLE
+    robloxPresetBtn.Text = "⚡ Definir Gravidade Roblox (196.2)"
+    robloxPresetBtn.Parent = pageBallistics
+    AddCorner(robloxPresetBtn, 4)
+    AddStroke(robloxPresetBtn, THEME.BORDER, 1)
+    robloxPresetBtn.MouseButton1Click:Connect(function()
+        SimConfig.Set("ProjectileGravity", 196.2)
+        DashboardGUI.AddDiagnosticLog("BALÍSTICA", "Gravidade redefinida para 196.2 studs/s² (padrão Roblox).", "OK")
+    end)
 
-    local projTypeLbl = Instance.new("TextLabel")
-    projTypeLbl.Size = UDim2.new(0, 110, 1, 0)
-    projTypeLbl.Position = UDim2.new(0, 10, 0, 0)
-    projTypeLbl.BackgroundTransparency = 1
-    projTypeLbl.Font = Enum.Font.GothamMedium
-    projTypeLbl.TextSize = 11
-    projTypeLbl.TextColor3 = THEME.TEXT_MAIN
-    projTypeLbl.TextXAlignment = Enum.TextXAlignment.Left
-    projTypeLbl.Text = "Modelo Balístico:"
-    projTypeLbl.Parent = projTypeRow
+    CreateToggleField(pageBallistics, "Compensação de Queda (Drop Compensation)", "ProjectileDropComp", SimConfig.Get("ProjectileDropComp"), "Compensa verticalmente a mira com base na distância e gravidade")
+    CreateToggleField(pageBallistics, "Predição Vetorial de Lead (Lead Calculation)", "EnableLead", SimConfig.Get("EnableLead"), "Calcula ponto futuro de impacto interceptando a velocidade estimada do alvo")
 
-    local projGrid = Instance.new("Frame")
-    projGrid.Size = UDim2.new(1, -125, 0, 24)
-    projGrid.Position = UDim2.new(0, 115, 0.5, -12)
-    projGrid.BackgroundTransparency = 1
-    projGrid.Parent = projTypeRow
+    local ballisticsFormulaCard = Instance.new("Frame")
+    ballisticsFormulaCard.Size = UDim2.new(1, 0, 0, 80)
+    ballisticsFormulaCard.BackgroundColor3 = THEME.BG_INPUT
+    ballisticsFormulaCard.Parent = pageBallistics
+    AddCorner(ballisticsFormulaCard, 6)
+    AddStroke(ballisticsFormulaCard, THEME.BORDER, 1)
 
-    local projLayout = Instance.new("UIGridLayout")
-    projLayout.CellSize = UDim2.new(0.48, 0, 1, 0)
-    projLayout.CellPadding = UDim2.new(0.04, 0, 0, 0)
-    projLayout.Parent = projGrid
+    local bfTitle = Instance.new("TextLabel")
+    bfTitle.Size = UDim2.new(1, -16, 0, 18)
+    bfTitle.Position = UDim2.new(0, 8, 0, 6)
+    bfTitle.BackgroundTransparency = 1
+    bfTitle.Font = Enum.Font.GothamBold
+    bfTitle.TextSize = 10
+    bfTitle.TextColor3 = THEME.TEXT_MAIN
+    bfTitle.TextXAlignment = Enum.TextXAlignment.Left
+    bfTitle.Text = "FORMULAÇÕES BALÍSTICAS IMPLEMENTADAS:"
+    bfTitle.Parent = ballisticsFormulaCard
 
-    local projButtons: { [string]: TextButton } = {}
-    local projOptions = { { Id = "Instant", Label = "Instantâneo (Raycast)" }, { Id = "Physics", Label = "Físico (Gravidade/Arco)" } }
-    local function UpdateProjTypeUI(activeId: string)
-        for id, btn in pairs(projButtons) do
-            local isSel = (id == activeId)
-            btn.BackgroundColor3 = isSel and THEME.ACCENT_RED or THEME.BG_WINDOW
-            btn.TextColor3 = isSel and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        end
-    end
-    for _, opt in ipairs(projOptions) do
-        local prBtn = Instance.new("TextButton")
-        local isCurrent = (SimConfig.Get("ProjectileType") or "Instant") == opt.Id
-        prBtn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_WINDOW
-        prBtn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
-        prBtn.Font = Enum.Font.GothamBold
-        prBtn.TextSize = 10
-        prBtn.Text = opt.Label
-        prBtn.Parent = projGrid
-        AddCorner(prBtn, 4)
-        AddStroke(prBtn, THEME.BORDER, 1)
-        projButtons[opt.Id] = prBtn
-        prBtn.MouseButton1Click:Connect(function()
-            SimConfig.Set("ProjectileType", opt.Id)
-            UpdateProjTypeUI(opt.Id)
-            DashboardGUI.AddDiagnosticLog("BALLISTICS", "Modelo balístico: " .. opt.Label, "INFO")
-        end)
-    end
-
-    CreateSliderField(pageBallistics, "Velocidade Balística Simulada (studs/s)", "ProjectileSpeed", 100, 3000, SimConfig.Get("ProjectileSpeed"), 50)
-    CreateSliderField(pageBallistics, "Gravidade de Projétil Físico (studs/s²)", "ProjectileGravity", 0, 500, SimConfig.Get("ProjectileGravity"), 10, "Padrão Roblox = 196.2 studs/s² | Gravidade zero = 0")
-    CreateToggleField(pageBallistics, "Compensação de Queda por Gravidade (Bullet Drop)", "ProjectileDropComp", SimConfig.Get("ProjectileDropComp"))
-    CreateToggleField(pageBallistics, "Ativar Predição Balística de Alvo (Lead Tracking)", "EnableLead", SimConfig.Get("EnableLead"))
-
-    local ballisticsInfoCard = Instance.new("Frame")
-    ballisticsInfoCard.Size = UDim2.new(1, 0, 0, 70)
-    ballisticsInfoCard.BackgroundColor3 = THEME.BG_INPUT
-    ballisticsInfoCard.Parent = pageBallistics
-    AddCorner(ballisticsInfoCard, 6)
-    AddStroke(ballisticsInfoCard, THEME.BORDER, 1)
-
-    local bTitle = Instance.new("TextLabel")
-    bTitle.Size = UDim2.new(1, -16, 0, 18)
-    bTitle.Position = UDim2.new(0, 8, 0, 6)
-    bTitle.BackgroundTransparency = 1
-    bTitle.Font = Enum.Font.GothamBold
-    bTitle.TextSize = 10
-    bTitle.TextColor3 = THEME.TEXT_MAIN
-    bTitle.TextXAlignment = Enum.TextXAlignment.Left
-    bTitle.Text = "TELEMETRIA BALÍSTICA E QUEDA PARABÓLICA:"
-    bTitle.Parent = ballisticsInfoCard
-
-    local bDesc = Instance.new("TextLabel")
-    bDesc.Size = UDim2.new(1, -16, 0, 36)
-    bDesc.Position = UDim2.new(0, 8, 0, 26)
-    bDesc.BackgroundTransparency = 1
-    bDesc.Font = Enum.Font.Code
-    bDesc.TextSize = 9
-    bDesc.TextColor3 = THEME.TEXT_MUTED
-    bDesc.TextXAlignment = Enum.TextXAlignment.Left
-    bDesc.Text = "Fórmula: Delta_Y = 0.5 * g * (d / v0)²  |  Trajetória segmentada em 10 arcos sob aceleração vetorial vertical."
-    bDesc.Parent = ballisticsInfoCard
+    local bfBody = Instance.new("TextLabel")
+    bfBody.Size = UDim2.new(1, -16, 0, 50)
+    bfBody.Position = UDim2.new(0, 8, 0, 24)
+    bfBody.BackgroundTransparency = 1
+    bfBody.Font = Enum.Font.Code
+    bfBody.TextSize = 9
+    bfBody.TextColor3 = THEME.TEXT_MUTED
+    bfBody.TextXAlignment = Enum.TextXAlignment.Left
+    bfBody.Text = "• Tempo de Voo: t = dist / V_ini\n• Queda Gravitacional: Delta_y = 0.5 * g * t^2\n• Trajetória Física: Segmentação de 10 passos contínuos sob Workspace:Raycast\n• Compensação Angular: atan2(Delta_y, dist) aplicado iterativamente."
+    bfBody.Parent = ballisticsFormulaCard
 
     -- =========================================================================
-    -- [ABA 4] DIAGNÓSTICO & ASSISTENTE INTELIGENTE (IA)
+    -- [ABA 6] DIAGNÓSTICO & IA (DIAGNOSTICS)
     -- =========================================================================
     local pageDiag = pages["Diagnostics"]
 
-    CreateSectionHeader(pageDiag, "AÇÕES DE DIAGNÓSTICO E AUDITORIA DO SISTEMA")
+    CreateSectionHeader(pageDiag, "MOTOR DE DIAGNÓSTICO EM 6 CAMADAS & RELATÓRIOS ESTRUTURADOS")
 
-    -- Botões de Ação Global de Diagnóstico
     local diagActionRow = Instance.new("Frame")
     diagActionRow.Size = UDim2.new(1, 0, 0, 34)
     diagActionRow.BackgroundTransparency = 1
@@ -1223,7 +1355,7 @@ function DashboardGUI.Create(): ScreenGui
     local runDiagBtn = Instance.new("TextButton")
     runDiagBtn.Size = UDim2.new(0.5, -4, 1, 0)
     runDiagBtn.Position = UDim2.new(0, 0, 0, 0)
-    runDiagBtn.BackgroundColor3 = THEME.ACCENT_RED
+    runDiagBtn.BackgroundColor3 = THEME.ACCENT_PURPLE
     runDiagBtn.TextColor3 = THEME.TEXT_MAIN
     runDiagBtn.Font = Enum.Font.GothamBold
     runDiagBtn.TextSize = 10.5
@@ -1232,87 +1364,177 @@ function DashboardGUI.Create(): ScreenGui
     AddCorner(runDiagBtn, 6)
     AddStroke(runDiagBtn, THEME.BORDER_LIGHT, 1)
 
-    local runShotBtn = Instance.new("TextButton")
-    runShotBtn.Size = UDim2.new(0.5, -4, 1, 0)
-    runShotBtn.Position = UDim2.new(0.5, 4, 0, 0)
-    runShotBtn.BackgroundColor3 = THEME.BG_INPUT
-    runShotBtn.TextColor3 = THEME.TEXT_MAIN
-    runShotBtn.Font = Enum.Font.GothamBold
-    runShotBtn.TextSize = 10.5
-    runShotBtn.Text = "🎯 TESTAR DISPARO SILENT AIM"
-    runShotBtn.Parent = diagActionRow
-    AddCorner(runShotBtn, 6)
-    AddStroke(runShotBtn, THEME.BORDER, 1)
+    local runShotDiagBtn = Instance.new("TextButton")
+    runShotDiagBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    runShotDiagBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    runShotDiagBtn.BackgroundColor3 = THEME.BG_INPUT
+    runShotDiagBtn.TextColor3 = THEME.TEXT_MAIN
+    runShotDiagBtn.Font = Enum.Font.GothamBold
+    runShotDiagBtn.TextSize = 10.5
+    runShotDiagBtn.Text = "🎯 TESTAR DISPARO SILENT AIM"
+    runShotDiagBtn.Parent = diagActionRow
+    AddCorner(runShotDiagBtn, 6)
+    AddStroke(runShotDiagBtn, THEME.BORDER, 1)
+    runShotDiagBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnSimulateSilentAimShot then DashboardGUI.OnSimulateSilentAimShot() end
+    end)
 
-    -- Card com Status dos Módulos
-    local moduleStatusCard = Instance.new("Frame")
-    moduleStatusCard.Size = UDim2.new(1, 0, 0, 52)
-    moduleStatusCard.BackgroundColor3 = THEME.BG_INPUT
-    moduleStatusCard.Parent = pageDiag
-    AddCorner(moduleStatusCard, 6)
-    AddStroke(moduleStatusCard, THEME.BORDER, 1)
+    -- Card com Resultado do Diagnóstico Estruturado
+    local diagResultCard = Instance.new("Frame")
+    diagResultCard.Size = UDim2.new(1, 0, 0, 110)
+    diagResultCard.BackgroundColor3 = THEME.BG_INPUT
+    diagResultCard.Parent = pageDiag
+    AddCorner(diagResultCard, 6)
+    AddStroke(diagResultCard, THEME.BORDER, 1)
 
-    local msPad = Instance.new("UIPadding")
-    msPad.PaddingTop = UDim.new(0, 4)
-    msPad.PaddingBottom = UDim.new(0, 4)
-    msPad.PaddingLeft = UDim.new(0, 6)
-    msPad.PaddingRight = UDim.new(0, 6)
-    msPad.Parent = moduleStatusCard
+    local drHeader = Instance.new("Frame")
+    drHeader.Size = UDim2.new(1, -16, 0, 20)
+    drHeader.Position = UDim2.new(0, 8, 0, 6)
+    drHeader.BackgroundTransparency = 1
+    drHeader.Parent = diagResultCard
 
-    local msLayout = Instance.new("UIGridLayout")
-    msLayout.CellSize = UDim2.new(0.24, 0, 1, 0)
-    msLayout.CellPadding = UDim2.new(0.013, 0, 0, 0)
-    msLayout.Parent = moduleStatusCard
+    local drStatusBadge = Instance.new("TextLabel")
+    drStatusBadge.Size = UDim2.new(0, 90, 1, 0)
+    drStatusBadge.BackgroundColor3 = THEME.SUCCESS
+    drStatusBadge.Font = Enum.Font.GothamBold
+    drStatusBadge.TextSize = 9.5
+    drStatusBadge.TextColor3 = THEME.TEXT_MAIN
+    drStatusBadge.Text = "HEALTHY"
+    drStatusBadge.Parent = drHeader
+    AddCorner(drStatusBadge, 4)
+    TelemetryLabels["Diag_StatusBadge"] = drStatusBadge
 
-    local function MakeModuleBadge(modName: string, initialStatus: string, labelKey: string)
-        local box = Instance.new("Frame")
-        box.BackgroundColor3 = THEME.BG_WINDOW
-        box.Parent = moduleStatusCard
-        AddCorner(box, 4)
-        AddStroke(box, THEME.BORDER, 1)
+    local drConfidenceBadge = Instance.new("TextLabel")
+    drConfidenceBadge.Size = UDim2.new(0, 150, 1, 0)
+    drConfidenceBadge.Position = UDim2.new(0, 98, 0, 0)
+    drConfidenceBadge.BackgroundColor3 = THEME.BG_WINDOW
+    drConfidenceBadge.Font = Enum.Font.Code
+    drConfidenceBadge.TextSize = 9
+    drConfidenceBadge.TextColor3 = THEME.ACCENT_PURPLE
+    drConfidenceBadge.Text = "[CONFIRMED - 100%]"
+    drConfidenceBadge.Parent = drHeader
+    AddCorner(drConfidenceBadge, 4)
+    AddStroke(drConfidenceBadge, THEME.BORDER, 1)
+    TelemetryLabels["Diag_ConfidenceBadge"] = drConfidenceBadge
 
-        local t1 = Instance.new("TextLabel")
-        t1.Size = UDim2.new(1, -6, 0, 16)
-        t1.Position = UDim2.new(0, 4, 0, 3)
-        t1.BackgroundTransparency = 1
-        t1.Font = Enum.Font.GothamBold
-        t1.TextSize = 9
-        t1.TextColor3 = THEME.TEXT_MAIN
-        t1.TextXAlignment = Enum.TextXAlignment.Left
-        t1.Text = modName
-        t1.Parent = box
+    local drSummary = Instance.new("TextLabel")
+    drSummary.Size = UDim2.new(1, -16, 0, 18)
+    drSummary.Position = UDim2.new(0, 8, 0, 30)
+    drSummary.BackgroundTransparency = 1
+    drSummary.Font = Enum.Font.GothamBold
+    drSummary.TextSize = 10
+    drSummary.TextColor3 = THEME.TEXT_MAIN
+    drSummary.TextXAlignment = Enum.TextXAlignment.Left
+    drSummary.Text = "Resumo: Todos os subsistemas cinemáticos operam dentro dos parâmetros nominais."
+    drSummary.Parent = diagResultCard
+    TelemetryLabels["Diag_Summary"] = drSummary
 
-        local t2 = Instance.new("TextLabel")
-        t2.Size = UDim2.new(1, -6, 0, 18)
-        t2.Position = UDim2.new(0, 4, 0, 20)
-        t2.BackgroundTransparency = 1
-        t2.Font = Enum.Font.Code
-        t2.TextSize = 8.5
-        t2.TextColor3 = THEME.SUCCESS
-        t2.TextXAlignment = Enum.TextXAlignment.Left
-        t2.Text = initialStatus
-        t2.Parent = box
-        TelemetryLabels[labelKey] = t2
-    end
+    local drCause = Instance.new("TextLabel")
+    drCause.Size = UDim2.new(1, -16, 0, 16)
+    drCause.Position = UDim2.new(0, 8, 0, 50)
+    drCause.BackgroundTransparency = 1
+    drCause.Font = Enum.Font.GothamMedium
+    drCause.TextSize = 9.5
+    drCause.TextColor3 = THEME.TEXT_MUTED
+    drCause.TextXAlignment = Enum.TextXAlignment.Left
+    drCause.Text = "Causa-Raiz: Rastreamento, lead e visada física validados no Workspace."
+    drCause.Parent = diagResultCard
+    TelemetryLabels["Diag_RootCause"] = drCause
 
-    MakeModuleBadge("VectorTracker", "● MONITORANDO", "ModStatus_Tracker")
-    MakeModuleBadge("InstanceDetector", "● ATIVO", "ModStatus_Detector")
-    MakeModuleBadge("DiagnosticAI", "● OPERACIONAL", "ModStatus_Diagnostic")
-    MakeModuleBadge("Silent Aim", "○ PRONTO", "ModStatus_SilentAim")
+    local drAction = Instance.new("TextLabel")
+    drAction.Size = UDim2.new(1, -16, 0, 16)
+    drAction.Position = UDim2.new(0, 8, 0, 68)
+    drAction.BackgroundTransparency = 1
+    drAction.Font = Enum.Font.GothamMedium
+    drAction.TextSize = 9.5
+    drAction.TextColor3 = THEME.INFO
+    drAction.TextXAlignment = Enum.TextXAlignment.Left
+    drAction.Text = "Ação Sugerida: Prossiga com os testes dinâmicos de movimentação."
+    drAction.Parent = diagResultCard
+    TelemetryLabels["Diag_SuggestedAction"] = drAction
 
-    CreateSectionHeader(pageDiag, "ASSISTENTE INTELIGENTE & CHATBOT DE DIAGNÓSTICO")
+    local drVerif = Instance.new("TextLabel")
+    drVerif.Size = UDim2.new(1, -16, 0, 16)
+    drVerif.Position = UDim2.new(0, 8, 0, 86)
+    drVerif.BackgroundTransparency = 1
+    drVerif.Font = Enum.Font.Code
+    drVerif.TextSize = 8.5
+    drVerif.TextColor3 = THEME.TEXT_MUTED
+    drVerif.TextXAlignment = Enum.TextXAlignment.Left
+    drVerif.Text = "Verificação: Estado estável verificado contra histórico."
+    drVerif.Parent = diagResultCard
+    TelemetryLabels["Diag_Verification"] = drVerif
+
+    -- Botões de Exportação Estruturada
+    CreateSectionHeader(pageDiag, "EXPORTAÇÃO ESTRUTURADA DE RELATÓRIO")
+    local exportActionRow = Instance.new("Frame")
+    exportActionRow.Size = UDim2.new(1, 0, 0, 30)
+    exportActionRow.BackgroundTransparency = 1
+    exportActionRow.Parent = pageDiag
+
+    local exportJsonBtn = Instance.new("TextButton")
+    exportJsonBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    exportJsonBtn.Position = UDim2.new(0, 0, 0, 0)
+    exportJsonBtn.BackgroundColor3 = THEME.BG_INPUT
+    exportJsonBtn.Font = Enum.Font.GothamBold
+    exportJsonBtn.TextSize = 10
+    exportJsonBtn.TextColor3 = THEME.TEXT_MAIN
+    exportJsonBtn.Text = "📄 EXPORTAR JSON"
+    exportJsonBtn.Parent = exportActionRow
+    AddCorner(exportJsonBtn, 5)
+    AddStroke(exportJsonBtn, THEME.BORDER, 1)
+
+    local exportMdBtn = Instance.new("TextButton")
+    exportMdBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    exportMdBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    exportMdBtn.BackgroundColor3 = THEME.BG_INPUT
+    exportMdBtn.Font = Enum.Font.GothamBold
+    exportMdBtn.TextSize = 10
+    exportMdBtn.TextColor3 = THEME.TEXT_MAIN
+    exportMdBtn.Text = "📑 EXPORTAR MARKDOWN"
+    exportMdBtn.Parent = exportActionRow
+    AddCorner(exportMdBtn, 5)
+    AddStroke(exportMdBtn, THEME.BORDER, 1)
+
+    local exportViewer = Instance.new("TextBox")
+    exportViewer.Size = UDim2.new(1, 0, 0, 60)
+    exportViewer.BackgroundColor3 = THEME.BG_WINDOW
+    exportViewer.TextColor3 = THEME.TEXT_MUTED
+    exportViewer.Font = Enum.Font.Code
+    exportViewer.TextSize = 9
+    exportViewer.TextWrapped = true
+    exportViewer.ClearTextOnFocus = false
+    exportViewer.Text = "-- Clique em 'Exportar JSON' ou 'Exportar Markdown' para visualizar o relatório estruturado aqui --"
+    exportViewer.Parent = pageDiag
+    AddCorner(exportViewer, 5)
+    AddStroke(exportViewer, THEME.BORDER, 1)
+
+    exportJsonBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnExportDiagnosticsJSON then
+            local str = DashboardGUI.OnExportDiagnosticsJSON()
+            exportViewer.Text = str
+            exportViewer.TextColor3 = THEME.SUCCESS
+        end
+    end)
+    exportMdBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnExportDiagnosticsMarkdown then
+            local str = DashboardGUI.OnExportDiagnosticsMarkdown()
+            exportViewer.Text = str
+            exportViewer.TextColor3 = THEME.INFO
+        end
+    end)
 
     -- Chatbot UI Container
+    CreateSectionHeader(pageDiag, "ASSISTENTE INTELIGENTE CHATBOT IA")
     local chatCard = Instance.new("Frame")
-    chatCard.Size = UDim2.new(1, 0, 0, 220)
+    chatCard.Size = UDim2.new(1, 0, 0, 200)
     chatCard.BackgroundColor3 = THEME.BG_INPUT
     chatCard.Parent = pageDiag
     AddCorner(chatCard, 8)
     AddStroke(chatCard, THEME.BORDER, 1)
 
-    -- Botões de Ação Rápida
     local quickBtnGrid = Instance.new("Frame")
-    quickBtnGrid.Size = UDim2.new(1, -16, 0, 26)
+    quickBtnGrid.Size = UDim2.new(1, -16, 0, 24)
     quickBtnGrid.Position = UDim2.new(0, 8, 0, 8)
     quickBtnGrid.BackgroundTransparency = 1
     quickBtnGrid.Parent = chatCard
@@ -1323,16 +1545,16 @@ function DashboardGUI.Create(): ScreenGui
     qbLayout.Parent = quickBtnGrid
 
     local chatResponseBox = Instance.new("TextLabel")
-    chatResponseBox.Size = UDim2.new(1, -16, 0, 120)
-    chatResponseBox.Position = UDim2.new(0, 8, 0, 42)
+    chatResponseBox.Size = UDim2.new(1, -16, 1, -76)
+    chatResponseBox.Position = UDim2.new(0, 8, 0, 36)
     chatResponseBox.BackgroundColor3 = THEME.BG_WINDOW
+    chatResponseBox.TextColor3 = THEME.TEXT_MAIN
     chatResponseBox.Font = Enum.Font.GothamMedium
     chatResponseBox.TextSize = 10
-    chatResponseBox.TextColor3 = THEME.TEXT_MAIN
     chatResponseBox.TextXAlignment = Enum.TextXAlignment.Left
     chatResponseBox.TextYAlignment = Enum.TextYAlignment.Top
     chatResponseBox.TextWrapped = true
-    chatResponseBox.Text = "  Assistente DeepHat pronto para responder. Selecione um diagnóstico rápido ou faça uma pergunta abaixo."
+    chatResponseBox.Text = "  Assistente DeepHat V8 pronto. Selecione um diagnóstico rápido ou faça uma pergunta abaixo."
     chatResponseBox.Parent = chatCard
     AddCorner(chatResponseBox, 6)
     AddStroke(chatResponseBox, THEME.BORDER, 1)
@@ -1368,24 +1590,30 @@ function DashboardGUI.Create(): ScreenGui
         qb.MouseButton1Click:Connect(function() TriggerChatQuery(query) end)
     end
 
-    MakeQuickButton("🔍 Analisar Saúde", "analisar status e erros do simulador")
+    MakeQuickButton("🔍 Saúde Geral", "analisar status e erros do simulador")
     MakeQuickButton("🎯 Testar Mira", "por que a mira não foca no alvo?")
-    MakeQuickButton("⚡ Testar Balística", "como calibrar gravidade e tempo de voo?")
-    MakeQuickButton("🛡️ Verificar Visada", "alvo está bloqueado ou ocluído?")
+    MakeQuickButton("⚡ Balística", "como calibrar gravidade e tempo de voo?")
+    MakeQuickButton("🛡️ Visada LOS", "alvo está bloqueado ou ocluído?")
 
     runDiagBtn.MouseButton1Click:Connect(function()
+        if DashboardGUI.OnRunFullDiagnostic then
+            local rep = DashboardGUI.OnRunFullDiagnostic()
+            if rep and type(rep) == "table" then
+                drStatusBadge.Text = rep.Status
+                drStatusBadge.BackgroundColor3 = (rep.Status == "HEALTHY") and THEME.SUCCESS or ((rep.Status == "CRITICAL") and THEME.ACCENT_RED or THEME.WARNING)
+                drConfidenceBadge.Text = string.format("[%s - %.0f%%]", rep.EvidenceType or "CONFIRMED", (rep.Confidence or 1) * 100)
+                drSummary.Text = "Resumo: " .. tostring(rep.Summary or "")
+                drCause.Text = "Causa-Raiz: " .. tostring(rep.RootCause or "")
+                drAction.Text = "Ação Sugerida: " .. tostring(rep.SuggestedAction or "")
+                drVerif.Text = "Verificação: " .. tostring(rep.VerificationResult or "Estado nominal verificado.")
+            end
+        end
         TriggerChatQuery("executar diagnóstico completo e status operacional de todos os módulos")
     end)
-    runShotBtn.MouseButton1Click:Connect(function()
-        if DashboardGUI.OnSimulateSilentAimShot then
-            DashboardGUI.OnSimulateSilentAimShot()
-        end
-    end)
 
-    -- Input Row do Chatbot
     local chatInputRow = Instance.new("Frame")
-    chatInputRow.Size = UDim2.new(1, -16, 0, 32)
-    chatInputRow.Position = UDim2.new(0, 8, 1, -40)
+    chatInputRow.Size = UDim2.new(1, -16, 0, 28)
+    chatInputRow.Position = UDim2.new(0, 8, 1, -34)
     chatInputRow.BackgroundTransparency = 1
     chatInputRow.Parent = chatCard
 
@@ -1405,9 +1633,9 @@ function DashboardGUI.Create(): ScreenGui
     local chatSendBtn = Instance.new("TextButton")
     chatSendBtn.Size = UDim2.new(0, 82, 1, 0)
     chatSendBtn.Position = UDim2.new(1, -82, 0, 0)
-    chatSendBtn.BackgroundColor3 = THEME.ACCENT_RED
+    chatSendBtn.BackgroundColor3 = THEME.ACCENT_PURPLE
     chatSendBtn.Font = Enum.Font.GothamBold
-    chatSendBtn.TextSize = 11
+    chatSendBtn.TextSize = 10.5
     chatSendBtn.TextColor3 = THEME.TEXT_MAIN
     chatSendBtn.Text = "ENVIAR"
     chatSendBtn.Parent = chatInputRow
@@ -1426,57 +1654,40 @@ function DashboardGUI.Create(): ScreenGui
         if enterPressed then SubmitChat() end
     end)
 
-    -- Seção de Cenários de Linha de Visada (LOS)
+    -- Cenários de Linha de Visada
     CreateSectionHeader(pageDiag, "CENÁRIOS DE LINHA DE VISADA (LINE OF SIGHT)")
-    LosLabels["Status"] = MakeInfoLabel(pageDiag, "Última consulta: (nenhuma)", THEME.TEXT_MUTED, 24)
-    LosLabels["Reason"] = MakeInfoLabel(pageDiag, "Causa: —", THEME.TEXT_MUTED, 22)
-    LosLabels["Blocker"] = MakeInfoLabel(pageDiag, "Obstrução: —", THEME.TEXT_MUTED, 22)
-    LosLabels["Distance"] = MakeInfoLabel(pageDiag, "Distância da colisão: —", THEME.TEXT_MUTED, 22)
+    LosLabels["Status"] = MakeInfoLabel(pageDiag, "Última consulta: (nenhuma)", THEME.TEXT_MUTED, 22)
+    LosLabels["Reason"] = MakeInfoLabel(pageDiag, "Causa: —", THEME.TEXT_MUTED, 20)
+    LosLabels["Blocker"] = MakeInfoLabel(pageDiag, "Obstrução: —", THEME.TEXT_MUTED, 20)
 
-    local function MakeButtonGrid(parent: Instance, cellW: number): Frame
-        local grid = Instance.new("Frame")
-        grid.Size = UDim2.new(1, 0, 0, 0)
-        grid.AutomaticSize = Enum.AutomaticSize.Y
-        grid.BackgroundTransparency = 1
-        grid.Parent = parent
-        local layout = Instance.new("UIGridLayout")
-        layout.CellSize = UDim2.new(0, cellW, 0, 26)
-        layout.CellPadding = UDim2.new(0, 6, 0, 6)
-        layout.Parent = grid
-        return grid
-    end
+    local losScenGrid = Instance.new("Frame")
+    losScenGrid.Size = UDim2.new(1, 0, 0, 0)
+    losScenGrid.AutomaticSize = Enum.AutomaticSize.Y
+    losScenGrid.BackgroundTransparency = 1
+    losScenGrid.Parent = pageDiag
 
-    local function MakeGridButton(grid: Instance, text: string, onClick: () -> ())
+    local lsLayout = Instance.new("UIGridLayout")
+    lsLayout.CellSize = UDim2.new(0, 150, 0, 24)
+    lsLayout.CellPadding = UDim2.new(0, 6, 0, 6)
+    lsLayout.Parent = losScenGrid
+
+    for _, sc in ipairs(ScenarioRunner.Scenarios) do
         local b = Instance.new("TextButton")
         b.BackgroundColor3 = THEME.BG_INPUT
         b.Font = Enum.Font.GothamMedium
-        b.TextSize = 10
+        b.TextSize = 9.5
         b.TextColor3 = THEME.TEXT_MAIN
-        b.TextWrapped = true
-        b.Text = text
-        b.Parent = grid
-        AddCorner(b, 5)
+        b.Text = "▶ " .. sc.Label
+        b.Parent = losScenGrid
+        AddCorner(b, 4)
         AddStroke(b, THEME.BORDER, 1)
-        b.MouseButton1Click:Connect(onClick)
-    end
-
-    local scenarioGrid = MakeButtonGrid(pageDiag, 150)
-    for _, sc in ipairs(ScenarioRunner.Scenarios) do
-        MakeGridButton(scenarioGrid, "▶ " .. sc.Label, function()
+        b.MouseButton1Click:Connect(function()
             if DashboardGUI.OnRunLosScenario then DashboardGUI.OnRunLosScenario(sc.Id) end
         end)
     end
-    MakeGridButton(scenarioGrid, "🗑 Limpar Histórico", function()
-        if DashboardGUI.OnClearLosHistory then DashboardGUI.OnClearLosHistory() end
-        if LosHistoryList then
-            for _, ch in ipairs(LosHistoryList:GetChildren()) do
-                if ch:IsA("TextLabel") then ch:Destroy() end
-            end
-        end
-    end)
 
     local losHistory = Instance.new("ScrollingFrame")
-    losHistory.Size = UDim2.new(1, 0, 0, 110)
+    losHistory.Size = UDim2.new(1, 0, 0, 90)
     losHistory.BackgroundColor3 = THEME.BG_WINDOW
     losHistory.ScrollBarThickness = 4
     losHistory.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -1490,33 +1701,17 @@ function DashboardGUI.Create(): ScreenGui
     losHistLayout.Parent = losHistory
     LosHistoryList = losHistory
 
-    -- Log de Diagnósticos em Tempo Real com Filtros de Nível
-    local logHeaderFrame = Instance.new("Frame")
-    logHeaderFrame.Size = UDim2.new(1, 0, 0, 26)
-    logHeaderFrame.BackgroundTransparency = 1
-    logHeaderFrame.Parent = pageDiag
+    -- =========================================================================
+    -- [ABA 7] LOGS & EVENTOS (LOGS)
+    -- =========================================================================
+    local pageLogs = pages["Logs"]
 
-    local logTitle = Instance.new("TextLabel")
-    logTitle.Size = UDim2.new(0, 220, 1, 0)
-    logTitle.BackgroundTransparency = 1
-    logTitle.Font = Enum.Font.GothamBold
-    logTitle.TextSize = 11
-    logTitle.TextColor3 = THEME.TEXT_MUTED
-    logTitle.TextXAlignment = Enum.TextXAlignment.Left
-    logTitle.Text = "LOG DE EVENTOS EM TEMPO REAL"
-    logTitle.Parent = logHeaderFrame
+    CreateSectionHeader(pageLogs, "TERMINAL DE OBSERVABILIDADE E LOGS EM TEMPO REAL")
 
-    local filterBar = Instance.new("Frame")
-    filterBar.Size = UDim2.new(1, -225, 1, 0)
-    filterBar.Position = UDim2.new(0, 225, 0, 0)
-    filterBar.BackgroundTransparency = 1
-    filterBar.Parent = logHeaderFrame
-
-    local filterLayout = Instance.new("UIListLayout")
-    filterLayout.FillDirection = Enum.FillDirection.Horizontal
-    filterLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-    filterLayout.Padding = UDim.new(0, 4)
-    filterLayout.Parent = filterBar
+    local logToolbar = Instance.new("Frame")
+    logToolbar.Size = UDim2.new(1, 0, 0, 30)
+    logToolbar.BackgroundTransparency = 1
+    logToolbar.Parent = pageLogs
 
     local filterButtons: { [string]: TextButton } = {}
     local filterOptions = { "TODOS", "OK", "INFO", "WARN", "FAIL" }
@@ -1525,7 +1720,7 @@ function DashboardGUI.Create(): ScreenGui
         currentLogFilter = flt
         for opt, btn in pairs(filterButtons) do
             if opt == flt then
-                btn.BackgroundColor3 = THEME.ACCENT_RED
+                btn.BackgroundColor3 = THEME.ACCENT_PURPLE
                 btn.TextColor3 = THEME.TEXT_MAIN
             else
                 btn.BackgroundColor3 = THEME.BG_INPUT
@@ -1535,15 +1730,25 @@ function DashboardGUI.Create(): ScreenGui
         ApplyLogFilter()
     end
 
+    local filterPills = Instance.new("Frame")
+    filterPills.Size = UDim2.new(0, 280, 1, 0)
+    filterPills.BackgroundTransparency = 1
+    filterPills.Parent = logToolbar
+
+    local fpLayout = Instance.new("UIListLayout")
+    fpLayout.FillDirection = Enum.FillDirection.Horizontal
+    fpLayout.Padding = UDim.new(0, 4)
+    fpLayout.Parent = filterPills
+
     for _, opt in ipairs(filterOptions) do
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(0, 52, 0, 22)
-        btn.BackgroundColor3 = (opt == "TODOS") and THEME.ACCENT_RED or THEME.BG_INPUT
+        btn.Size = UDim2.new(0, 50, 0, 24)
+        btn.BackgroundColor3 = (opt == "TODOS") and THEME.ACCENT_PURPLE or THEME.BG_INPUT
         btn.Font = Enum.Font.GothamBold
         btn.TextSize = 9
         btn.TextColor3 = (opt == "TODOS") and THEME.TEXT_MAIN or THEME.TEXT_MUTED
         btn.Text = opt
-        btn.Parent = filterBar
+        btn.Parent = filterPills
         AddCorner(btn, 4)
         AddStroke(btn, THEME.BORDER, 1)
         filterButtons[opt] = btn
@@ -1552,13 +1757,63 @@ function DashboardGUI.Create(): ScreenGui
         end)
     end
 
+    -- Caixa de Busca Textual de Logs
+    local logSearchBox = Instance.new("TextBox")
+    logSearchBox.Size = UDim2.new(1, -410, 0, 24)
+    logSearchBox.Position = UDim2.new(0, 285, 0, 0)
+    logSearchBox.BackgroundColor3 = THEME.BG_INPUT
+    logSearchBox.TextColor3 = THEME.TEXT_MAIN
+    logSearchBox.PlaceholderText = "🔍 Buscar termo nos logs..."
+    logSearchBox.PlaceholderColor3 = THEME.TEXT_MUTED
+    logSearchBox.Font = Enum.Font.GothamMedium
+    logSearchBox.TextSize = 9.5
+    logSearchBox.ClearTextOnFocus = false
+    logSearchBox.Parent = logToolbar
+    AddCorner(logSearchBox, 4)
+    AddStroke(logSearchBox, THEME.BORDER, 1)
+    logSearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        currentLogSearch = logSearchBox.Text
+        ApplyLogFilter()
+    end)
+
+    local clearLogsBtn = Instance.new("TextButton")
+    clearLogsBtn.Size = UDim2.new(0, 110, 0, 24)
+    clearLogsBtn.Position = UDim2.new(1, -110, 0, 0)
+    clearLogsBtn.BackgroundColor3 = THEME.BG_INPUT
+    clearLogsBtn.Font = Enum.Font.GothamBold
+    clearLogsBtn.TextSize = 9
+    clearLogsBtn.TextColor3 = THEME.TEXT_MAIN
+    clearLogsBtn.Text = "🗑️ Limpar Logs"
+    clearLogsBtn.Parent = logToolbar
+    AddCorner(clearLogsBtn, 4)
+    AddStroke(clearLogsBtn, THEME.BORDER, 1)
+    clearLogsBtn.MouseButton1Click:Connect(function()
+        if EventLogListInstance then
+            for _, ch in ipairs(EventLogListInstance:GetChildren()) do
+                if ch:IsA("Frame") then ch:Destroy() end
+            end
+            ApplyLogFilter()
+        end
+    end)
+
+    local logCounterLabel = Instance.new("TextLabel")
+    logCounterLabel.Size = UDim2.new(1, 0, 0, 14)
+    logCounterLabel.BackgroundTransparency = 1
+    logCounterLabel.Font = Enum.Font.GothamMedium
+    logCounterLabel.TextSize = 9
+    logCounterLabel.TextColor3 = THEME.TEXT_MUTED
+    logCounterLabel.TextXAlignment = Enum.TextXAlignment.Left
+    logCounterLabel.Text = "Exibindo 0 de 0 eventos"
+    logCounterLabel.Parent = pageLogs
+    LogCounterLabelInstance = logCounterLabel
+
     local eventLogList = Instance.new("ScrollingFrame")
-    eventLogList.Size = UDim2.new(1, 0, 0, 120)
+    eventLogList.Size = UDim2.new(1, 0, 0, 360)
     eventLogList.BackgroundColor3 = THEME.BG_WINDOW
     eventLogList.ScrollBarThickness = 4
     eventLogList.CanvasSize = UDim2.new(0, 0, 0, 0)
     eventLogList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    eventLogList.Parent = pageDiag
+    eventLogList.Parent = pageLogs
     AddCorner(eventLogList, 6)
     AddStroke(eventLogList, THEME.BORDER, 1)
     local evListLayout = Instance.new("UIListLayout")
@@ -1567,7 +1822,7 @@ function DashboardGUI.Create(): ScreenGui
     EventLogListInstance = eventLogList
 
     -- =========================================================================
-    -- [ABA 5] CONFIGURAÇÕES & PERFIS (SETTINGS)
+    -- [ABA 8] CONFIGURAÇÕES & PERFIS (SETTINGS)
     -- =========================================================================
     local pageSettings = pages["Settings"]
 
@@ -1587,93 +1842,159 @@ function DashboardGUI.Create(): ScreenGui
     local function UpdateProfileUI(activeProf: string)
         for name, btn in pairs(profileCards) do
             local isCurrent = (name == activeProf)
-            btn.BackgroundColor3 = isCurrent and THEME.ACCENT_RED or THEME.BG_INPUT
+            btn.BackgroundColor3 = isCurrent and THEME.ACCENT_PURPLE or THEME.BG_INPUT
             btn.TextColor3 = isCurrent and THEME.TEXT_MAIN or THEME.TEXT_MUTED
         end
     end
     for _, pName in ipairs(profileList) do
         local pBtn = Instance.new("TextButton")
-        pBtn.BackgroundColor3 = (pName == SimConfig.Get("ActiveProfile")) and THEME.ACCENT_RED or THEME.BG_INPUT
+        pBtn.BackgroundColor3 = (pName == SimConfig.Get("ActiveProfile")) and THEME.ACCENT_PURPLE or THEME.BG_INPUT
         pBtn.Font = Enum.Font.GothamBold
         pBtn.TextSize = 11
-        pBtn.TextColor3 = THEME.TEXT_MAIN
+        pBtn.TextColor3 = (pName == SimConfig.Get("ActiveProfile")) and THEME.TEXT_MAIN or THEME.TEXT_MUTED
         pBtn.Text = pName
         pBtn.Parent = profileGrid
-        AddCorner(pBtn, 6)
+        AddCorner(pBtn, 5)
         AddStroke(pBtn, THEME.BORDER, 1)
         profileCards[pName] = pBtn
         pBtn.MouseButton1Click:Connect(function()
-            SimConfig.LoadProfile(pName)
+            SimConfig.ApplyProfile(pName)
             UpdateProfileUI(pName)
-            DashboardGUI.AddDiagnosticLog("CONFIG", "Perfil carregado: " .. pName, "INFO")
+            DashboardGUI.AddDiagnosticLog("PROFILE", "Perfil alterado para: " .. pName, "INFO")
         end)
     end
 
-    CreateSectionHeader(pageSettings, "PERSISTÊNCIA E EXPORTAÇÃO JSON")
-    local cfgBtnGrid = MakeButtonGrid(pageSettings, 150)
-    MakeGridButton(cfgBtnGrid, "💾 Salvar Configuração", function()
-        local saved = SimConfig.Save()
-        DashboardGUI.AddDiagnosticLog("CONFIG", saved and "Configurações persistidas." or "Persistência indisponível.", saved and "OK" or "WARN")
-        if DashboardGUI.OnSaveRequested then DashboardGUI.OnSaveRequested() end
+    CreateSectionHeader(pageSettings, "PREFERÊNCIAS DA INTERFACE")
+    CreateSliderField(pageSettings, "Transparência do Fundo da Janela", "WindowTransparency", 0.0, 0.8, SimConfig.Get("WindowTransparency") or 0.0, 0.05, "Ajuste de opacidade do fundo para observação do ambiente de jogo")
+    SimConfig.Subscribe("WindowTransparency", function(val)
+        if MainFrameInstance and typeof(val) == "number" then
+            MainFrameInstance.BackgroundTransparency = math.clamp(val, 0, 0.8)
+        end
     end)
-    MakeGridButton(cfgBtnGrid, "↺ Restaurar Padrões", function()
-        SimConfig.RestoreDefaults("Restaurar padrões (Settings)")
+
+    local hotkeyCard = Instance.new("Frame")
+    hotkeyCard.Size = UDim2.new(1, 0, 0, 36)
+    hotkeyCard.BackgroundColor3 = THEME.BG_INPUT
+    hotkeyCard.Parent = pageSettings
+    AddCorner(hotkeyCard, 6)
+    AddStroke(hotkeyCard, THEME.BORDER, 1)
+
+    local hkLabel = Instance.new("TextLabel")
+    hkLabel.Size = UDim2.new(1, -16, 1, 0)
+    hkLabel.Position = UDim2.new(0, 10, 0, 0)
+    hkLabel.BackgroundTransparency = 1
+    hkLabel.Font = Enum.Font.GothamMedium
+    hkLabel.TextSize = 10
+    hkLabel.TextColor3 = THEME.TEXT_MAIN
+    hkLabel.TextXAlignment = Enum.TextXAlignment.Left
+    hkLabel.Text = "⌨️ Teclas de Atalho: Pressione [HOME] ou [RightShift] para abrir/fechar o painel."
+    hkLabel.Parent = hotkeyCard
+
+    CreateSectionHeader(pageSettings, "GERENCIAMENTO E PERSISTÊNCIA DE DADOS")
+    local persistRow = Instance.new("Frame")
+    persistRow.Size = UDim2.new(1, 0, 0, 32)
+    persistRow.BackgroundTransparency = 1
+    persistRow.Parent = pageSettings
+
+    local saveBtn = Instance.new("TextButton")
+    saveBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    saveBtn.Position = UDim2.new(0, 0, 0, 0)
+    saveBtn.BackgroundColor3 = THEME.ACCENT_PURPLE
+    saveBtn.Font = Enum.Font.GothamBold
+    saveBtn.TextSize = 10.5
+    saveBtn.TextColor3 = THEME.TEXT_MAIN
+    saveBtn.Text = "💾 SALVAR CONFIGURAÇÕES"
+    saveBtn.Parent = persistRow
+    AddCorner(saveBtn, 5)
+    AddStroke(saveBtn, THEME.BORDER_LIGHT, 1)
+    saveBtn.MouseButton1Click:Connect(function()
+        local ok = SimConfig.Save()
+        DashboardGUI.AddDiagnosticLog("SAVE", ok and "Configurações persistidas com sucesso." or "Falha ao persistir.", ok and "OK" or "WARN")
+    end)
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    resetBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    resetBtn.BackgroundColor3 = THEME.BG_INPUT
+    resetBtn.Font = Enum.Font.GothamBold
+    resetBtn.TextSize = 10.5
+    resetBtn.TextColor3 = THEME.ACCENT_RED
+    resetBtn.Text = "⚠️ RESTAURAR PADRÕES"
+    resetBtn.Parent = persistRow
+    AddCorner(resetBtn, 5)
+    AddStroke(resetBtn, THEME.BORDER, 1)
+    resetBtn.MouseButton1Click:Connect(function()
+        SimConfig.RestoreDefaults("Reset acionado pelo usuário")
         UpdateProfileUI(SimConfig.DefaultProfileName)
-        DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações restauradas.", "WARN")
-        if DashboardGUI.OnResetRequested then DashboardGUI.OnResetRequested() end
-    end)
-    MakeGridButton(cfgBtnGrid, "📤 Exportar JSON", function()
-        local json = SimConfig.ExportJSON()
-        pcall(function()
-            if setclipboard then
-                setclipboard(json)
-                DashboardGUI.AddDiagnosticLog("CONFIG", "JSON copiado para a área de transferência!", "OK")
-            else
-                DashboardGUI.AddDiagnosticLog("CONFIG", "JSON gerado no console.", "INFO")
-                print("\n[DeepHat SimConfig JSON Export]\n" .. json)
-            end
-        end)
+        DashboardGUI.AddDiagnosticLog("RESET", "Todos os parâmetros foram restaurados aos padrões de fábrica.", "OK")
     end)
 
-    local importBox = Instance.new("TextBox")
-    importBox.Size = UDim2.new(1, 0, 0, 50)
-    importBox.BackgroundColor3 = THEME.BG_WINDOW
-    importBox.TextColor3 = THEME.TEXT_MAIN
-    importBox.PlaceholderText = "Cole aqui o JSON para importar configurações..."
-    importBox.PlaceholderColor3 = THEME.TEXT_MUTED
-    importBox.Font = Enum.Font.Code
-    importBox.TextSize = 10
-    importBox.TextWrapped = true
-    importBox.ClearTextOnFocus = false
-    importBox.MultiLine = true
-    importBox.TextXAlignment = Enum.TextXAlignment.Left
-    importBox.TextYAlignment = Enum.TextYAlignment.Top
-    importBox.Parent = pageSettings
-    AddCorner(importBox, 5)
-    AddStroke(importBox, THEME.BORDER, 1)
+    local ioCard = Instance.new("Frame")
+    ioCard.Size = UDim2.new(1, 0, 0, 80)
+    ioCard.BackgroundColor3 = THEME.BG_INPUT
+    ioCard.Parent = pageSettings
+    AddCorner(ioCard, 6)
+    AddStroke(ioCard, THEME.BORDER, 1)
 
-    local importBtn = Instance.new("TextButton")
-    importBtn.Size = UDim2.new(0, 160, 0, 28)
-    importBtn.BackgroundColor3 = THEME.BG_INPUT
-    importBtn.Font = Enum.Font.GothamBold
-    importBtn.TextSize = 10
-    importBtn.TextColor3 = THEME.TEXT_MAIN
-    importBtn.Text = "⬇ IMPORTAR JSON (VALIDADO)"
-    importBtn.Parent = pageSettings
-    AddCorner(importBtn, 5)
-    AddStroke(importBtn, THEME.BORDER, 1)
-    importBtn.MouseButton1Click:Connect(function()
-        local ok, errors = SimConfig.ImportJSON(importBox.Text)
-        if ok then
-            DashboardGUI.AddDiagnosticLog("CONFIG", "Importação validada e aplicada.", "OK")
+    local ioBox = Instance.new("TextBox")
+    ioBox.Size = UDim2.new(1, -16, 0, 36)
+    ioBox.Position = UDim2.new(0, 8, 0, 6)
+    ioBox.BackgroundColor3 = THEME.BG_WINDOW
+    ioBox.TextColor3 = THEME.TEXT_MAIN
+    ioBox.Font = Enum.Font.Code
+    ioBox.TextSize = 9
+    ioBox.ClearTextOnFocus = false
+    ioBox.PlaceholderText = "Cole JSON para importar ou clique em Exportar..."
+    ioBox.PlaceholderColor3 = THEME.TEXT_MUTED
+    ioBox.Parent = ioCard
+    AddCorner(ioBox, 4)
+    AddStroke(ioBox, THEME.BORDER, 1)
+
+    local ioBtnRow = Instance.new("Frame")
+    ioBtnRow.Size = UDim2.new(1, -16, 0, 26)
+    ioBtnRow.Position = UDim2.new(0, 8, 0, 48)
+    ioBtnRow.BackgroundTransparency = 1
+    ioBtnRow.Parent = ioCard
+
+    local expBtn = Instance.new("TextButton")
+    expBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    expBtn.Position = UDim2.new(0, 0, 0, 0)
+    expBtn.BackgroundColor3 = THEME.BG_WINDOW
+    expBtn.Font = Enum.Font.GothamBold
+    expBtn.TextSize = 9.5
+    expBtn.TextColor3 = THEME.TEXT_MAIN
+    expBtn.Text = "📤 Exportar JSON"
+    expBtn.Parent = ioBtnRow
+    AddCorner(expBtn, 4)
+    AddStroke(expBtn, THEME.BORDER, 1)
+    expBtn.MouseButton1Click:Connect(function()
+        ioBox.Text = SimConfig.ExportJSON()
+        DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações exportadas para a caixa de texto.", "INFO")
+    end)
+
+    local impBtn = Instance.new("TextButton")
+    impBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    impBtn.Position = UDim2.new(0.5, 4, 0, 0)
+    impBtn.BackgroundColor3 = THEME.BG_WINDOW
+    impBtn.Font = Enum.Font.GothamBold
+    impBtn.TextSize = 9.5
+    impBtn.TextColor3 = THEME.TEXT_MAIN
+    impBtn.Text = "📥 Importar JSON"
+    impBtn.Parent = ioBtnRow
+    AddCorner(impBtn, 4)
+    AddStroke(impBtn, THEME.BORDER, 1)
+    impBtn.MouseButton1Click:Connect(function()
+        local success, errors = SimConfig.ImportJSON(ioBox.Text)
+        if success then
+            DashboardGUI.AddDiagnosticLog("CONFIG", "Configurações importadas com sucesso.", "OK")
         else
             DashboardGUI.AddDiagnosticLog("CONFIG", "Importação rejeitada: " .. table.concat(errors, "; "):sub(1, 160), "WARN")
         end
     end)
 
     -- Aba Inicial
-    local startTab = tostring(SimConfig.Get("ActiveTab") or "AimSimulation")
-    if pages[startTab] then SwitchTab(startTab) else SwitchTab("AimSimulation") end
+    local startTab = tostring(SimConfig.Get("ActiveTab") or "Dashboard")
+    SwitchTab(startTab)
 
     -- Barra Inferior de Ações (Footer)
     local footer = Instance.new("Frame")
@@ -1699,9 +2020,9 @@ function DashboardGUI.Create(): ScreenGui
     local function CreateBottomButton(text: string, isPrimary: boolean, onClick: () -> ()): TextButton
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(0, 140, 0, 32)
-        btn.BackgroundColor3 = isPrimary and THEME.ACCENT_RED or THEME.BG_INPUT
+        btn.BackgroundColor3 = isPrimary and THEME.ACCENT_PURPLE or THEME.BG_INPUT
         btn.Font = Enum.Font.GothamBold
-        btn.TextSize = 11
+        btn.TextSize = 10.5
         btn.TextColor3 = THEME.TEXT_MAIN
         btn.Text = text
         btn.Parent = footer
@@ -1733,7 +2054,7 @@ function DashboardGUI.Create(): ScreenGui
 
     CreateBottomButton("▶ INICIAR TESTE", true, function()
         SimConfig.Set("SimulationActive", true)
-        masterSwitch.BackgroundColor3 = THEME.ACCENT_RED
+        masterSwitch.BackgroundColor3 = THEME.ACCENT_PURPLE
         masterSwitch.Text = "SIMULAÇÃO: ATIVA"
         DashboardGUI.AddDiagnosticLog("ENGINE", "Sessão de teste iniciada.", "OK")
         if DashboardGUI.OnStartRequested then DashboardGUI.OnStartRequested() end
@@ -1746,13 +2067,15 @@ function DashboardGUI.Create(): ScreenGui
             UpdateProfileUI(tostring(val))
         elseif key == "SimulationActive" then
             local active = (val == true)
-            masterSwitch.BackgroundColor3 = active and THEME.ACCENT_RED or THEME.BG_WINDOW
+            masterSwitch.BackgroundColor3 = active and THEME.ACCENT_PURPLE or THEME.BG_WINDOW
             masterSwitch.Text = active and "SIMULAÇÃO: ATIVA" or "SIMULAÇÃO: PAUSADA"
             if FovCircleInstance then
                 FovCircleInstance.Visible = active and (SimConfig.Get("ShowFovCircle") == true)
             end
-        elseif key == "TargetRegion" then
-            UpdateBoneUI(tostring(val))
+            if TelemetryLabels["Dash_SimStatus"] then
+                TelemetryLabels["Dash_SimStatus"].Text = active and "ATIVO" or "PAUSADO"
+                TelemetryLabels["Dash_SimStatus"].TextColor3 = active and THEME.SUCCESS or THEME.WARNING
+            end
         elseif syncInputs[key] and typeof(val) == "number" then
             syncInputs[key](val)
         end
@@ -1762,7 +2085,7 @@ function DashboardGUI.Create(): ScreenGui
         if unsubscribeGlobal then unsubscribeGlobal(); unsubscribeGlobal = nil end
     end)
 
-    DashboardGUI.AddDiagnosticLog("INIT", "Dashboard GUI carregada com 5 abas otimizadas.", "OK")
+    DashboardGUI.AddDiagnosticLog("INIT", "Dashboard GUI carregada com 8 abas profissionais v8.0 PRO.", "OK")
     return screenGui
 end
 
@@ -1774,19 +2097,14 @@ function DashboardGUI:UpdateFovCircle()
     local camera = Workspace.CurrentCamera
     if not camera then return end
 
-    local active = SimConfig.Get("SimulationActive") == true
-    local show = SimConfig.Get("ShowFovCircle") == true and active
-    FovCircleInstance.Visible = show
+    local viewportSize = camera.ViewportSize
+    if viewportSize.X <= 0 or viewportSize.Y <= 0 then return end
 
-    if show then
-        local fov = math.clamp(tonumber(SimConfig.Get("FOV")) or 70.0, 5.0, 170.0)
-        local vpY = math.max(camera.ViewportSize.Y, 1)
-        local camFovRad = math.rad(math.clamp(camera.FieldOfView, 10.0, 120.0) / 2)
-        local aimFovRad = math.rad(fov / 2)
-        local radius = math.clamp((math.tan(aimFovRad) / math.tan(camFovRad)) * (vpY / 2), 5, vpY)
-        FovCircleInstance.Size = UDim2.new(0, radius * 2, 0, radius * 2)
-        FovCircleInstance.Position = UDim2.new(0.5, 0, 0.5, 0)
-    end
+    local fovRadiusPx = tonumber(SimConfig.Get("FovRadiusPx")) or 120
+    local diameter = fovRadiusPx * 2
+    FovCircleInstance.Size = UDim2.new(0, diameter, 0, diameter)
+    FovCircleInstance.Position = UDim2.new(0.5, 0, 0.5, 0)
+    FovCircleInstance.Visible = SimConfig.Get("ShowFovCircle") == true and SimConfig.Get("SimulationActive") == true
 end
 
 function DashboardGUI:UpdateTelemetryDisplay(data: {
@@ -1811,14 +2129,19 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
         TelemetryLabels["AngVel"].Text = string.format("%.1f °/s", angVel)
     end
 
+    local obstructed = (data.isObstructed == true)
     if TelemetryLabels["VisStatus"] then
-        local obstructed = (data.isObstructed == true)
         TelemetryLabels["VisStatus"].Text = obstructed and "OBSTRUÍDO" or "LIVRE"
         TelemetryLabels["VisStatus"].TextColor3 = obstructed and THEME.ACCENT_RED or THEME.SUCCESS
     end
 
+    local targetStr = tostring(data.targetName or "NENHUM")
     if TelemetryLabels["ActiveTarget"] then
-        TelemetryLabels["ActiveTarget"].Text = tostring(data.targetName or "NENHUM")
+        TelemetryLabels["ActiveTarget"].Text = targetStr
+    end
+    if TelemetryLabels["Dash_TargetName"] then
+        TelemetryLabels["Dash_TargetName"].Text = targetStr
+        TelemetryLabels["Dash_TargetName"].TextColor3 = (targetStr ~= "NENHUM" and not targetStr:find("Nenhum")) and THEME.SUCCESS or THEME.TEXT_MUTED
     end
 
     local saEnabled = SimConfig.Get("SilentAimEnabled") == true
@@ -1918,10 +2241,10 @@ function DashboardGUI:UpdateTelemetryDisplay(data: {
     end
 end
 
--- Watchdog de Fundo
+-- Watchdog de Fundo (Monitor de Saúde em Tempo Real)
 task.spawn(function()
     while true do
-        task.wait(1.0)
+        task.wait(0.75)
         local ok, _ = pcall(function()
             local now = os.clock()
             local dt = now - PerformanceData.LastCheck
@@ -1931,6 +2254,9 @@ task.spawn(function()
 
             if TelemetryLabels["FpsCounter"] then
                 TelemetryLabels["FpsCounter"].Text = string.format("%d FPS", currentFps)
+            end
+            if TelemetryLabels["Dash_FpsCounter"] then
+                TelemetryLabels["Dash_FpsCounter"].Text = string.format("%d FPS", currentFps)
             end
 
             local healthGood = true
@@ -1949,7 +2275,7 @@ task.spawn(function()
 
             if WatchdogBadgeInstance and WatchdogBadgeInstance.Parent then
                 if healthGood then
-                    WatchdogBadgeInstance.Text = "● WATCHDOG: 100% OPERACIONAL"
+                    WatchdogBadgeInstance.Text = "● MONITOR: 100% OPERACIONAL"
                     WatchdogBadgeInstance.TextColor3 = THEME.SUCCESS
                 else
                     WatchdogBadgeInstance.Text = "⚠️ ALERTA: " .. string.upper(reason)
@@ -1961,65 +2287,57 @@ task.spawn(function()
 end)
 
 function DashboardGUI:UpdateLos(last: any, history: { any }?)
-    local status = LosLabels["Status"]
-    if not status or not status.Parent then return end
-    if not last then
-        status.Text = "  Última consulta: (nenhuma)"
-        status.TextColor3 = THEME.TEXT_MUTED
-        return
+    if not last then return end
+    if LosLabels["Status"] then
+        local passed = (last.Status == "FREE")
+        LosLabels["Status"].Text = string.format("  Status: %s (Alvo: %s)", passed and "VISADA LIVRE" or "BLOQUEADO", tostring(last.Target or "Nenhum"))
+        LosLabels["Status"].TextColor3 = passed and THEME.SUCCESS or THEME.ACCENT_RED
     end
-    local color = THEME.WARNING
-    if last.Status == "VISIBLE" then color = THEME.SUCCESS elseif last.Status == "BLOCKED" then color = THEME.ACCENT_RED end
-    status.Text = "  Última consulta: " .. tostring(last.Status)
-    status.TextColor3 = color
-    if LosLabels["Reason"] then LosLabels["Reason"].Text = "  Causa: " .. tostring(last.Reason) end
-    if LosLabels["Blocker"] then LosLabels["Blocker"].Text = "  Obstrução: " .. tostring(last.BlockerName or "—") end
-    if LosLabels["Distance"] then
-        LosLabels["Distance"].Text = last.HitDistance and string.format("  Distância: %.2f studs (consulta: %.2f)", last.HitDistance, last.QueryDistance or 0)
-            or string.format("  Distância: — (consulta: %.2f)", last.QueryDistance or 0)
+    if LosLabels["Reason"] then
+        LosLabels["Reason"].Text = "  Motivo: " .. tostring(last.Reason or "Sem obstruções.")
+    end
+    if LosLabels["Blocker"] then
+        LosLabels["Blocker"].Text = "  Colisor: " .. tostring(last.Blocker or "Nenhum")
     end
 
-    if LosHistoryList and history then
-        local newest = history[#history]
-        local stamp = newest and (newest.Time * 1000 + #history) or 0
-        if stamp == LastRenderedLosStamp then return end
-        LastRenderedLosStamp = stamp
-        for _, ch in ipairs(LosHistoryList:GetChildren()) do
-            if ch:IsA("TextLabel") then ch:Destroy() end
-        end
-        for i = #history, math.max(1, #history - 39), -1 do
-            local h = history[i]
-            local c = THEME.WARNING
-            if h.Status == "VISIBLE" then c = THEME.SUCCESS elseif h.Status == "BLOCKED" then c = THEME.ACCENT_RED end
-            local row = Instance.new("TextLabel")
-            row.Size = UDim2.new(1, -8, 0, 18)
-            row.BackgroundTransparency = 1
-            row.Font = Enum.Font.Code
-            row.TextSize = 10
-            row.TextColor3 = c
-            row.TextXAlignment = Enum.TextXAlignment.Left
-            row.LayoutOrder = #history - i
-            row.Text = string.format("  %-8s %-14s %s%s", h.Status, tostring(h.Target), tostring(h.Reason), h.Blocker and (" [" .. h.Blocker .. "]") or "")
-            row.Parent = LosHistoryList
+    if history and LosHistoryList and LosHistoryList.Parent then
+        local stamp = (history[#history] and history[#history].Timestamp) or -1
+        if stamp ~= LastRenderedLosStamp then
+            LastRenderedLosStamp = stamp
+            for _, ch in ipairs(LosHistoryList:GetChildren()) do
+                if ch:IsA("TextLabel") then ch:Destroy() end
+            end
+            local startIdx = math.max(1, #history - 15)
+            for i = #history, startIdx, -1 do
+                local entry = history[i]
+                local item = Instance.new("TextLabel")
+                item.Size = UDim2.new(1, -8, 0, 16)
+                item.BackgroundTransparency = 1
+                item.Font = Enum.Font.Code
+                item.TextSize = 8.5
+                item.TextXAlignment = Enum.TextXAlignment.Left
+                local isOk = (entry.Status == "FREE")
+                item.TextColor3 = isOk and THEME.SUCCESS or THEME.ACCENT_RED
+                item.Text = string.format("[%s] %s | %s (%s)",
+                    entry.Context or "Frame",
+                    entry.Status,
+                    entry.Blocker or "Sem obstáculo",
+                    tostring(entry.Target or "Alvo")
+                )
+                item.Parent = LosHistoryList
+            end
         end
     end
 end
 
 function DashboardGUI:UpdateDetection(info: any)
-    if not DetLabels["State"] or not DetLabels["State"].Parent or not info then return end
-    local r = info.report
-    if not info.engineAvailable then
-        DetLabels["State"].Text = "  Estado: EngineCore indisponível"
-        DetLabels["State"].TextColor3 = THEME.WARNING
-    elseif not r then
-        DetLabels["State"].Text = "  Estado: aguardando amostras reais"
-        DetLabels["State"].TextColor3 = THEME.TEXT_MUTED
-    else
-        local color = THEME.SUCCESS
-        if r.category == "INSUFICIENTE" then color = THEME.WARNING
-        elseif r.category ~= "LIMPO" then color = THEME.ACCENT_RED end
-        DetLabels["State"].Text = string.format("  Classificação: %s (score %d)", r.category, r.totalScore)
-        DetLabels["State"].TextColor3 = color
+    if not info then return end
+    if DetLabels["Count"] then
+        DetLabels["Count"].Text = string.format("  Candidatos no Raio: %d", tonumber(info.Count) or 0)
+    end
+    if DetLabels["BestTarget"] then
+        DetLabels["BestTarget"].Text = "  Alvo Selecionado: " .. tostring(info.BestTarget or "Nenhum")
+        DetLabels["BestTarget"].TextColor3 = info.BestTarget and THEME.SUCCESS or THEME.TEXT_MUTED
     end
 end
 
@@ -2036,7 +2354,7 @@ function DashboardGUI.SetVisible(visible: boolean)
 end
 
 function DashboardGUI.IsVisible(): boolean
-    return MainFrameInstance ~= nil and MainFrameInstance.Visible == true
+    return MainFrameInstance ~= nil and MainFrameInstance.Visible
 end
 
 function DashboardGUI.GetScreenGui(): ScreenGui?

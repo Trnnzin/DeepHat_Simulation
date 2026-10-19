@@ -60,3 +60,16 @@ InstanceDetector   VectorTracker   VisualOverlayRenderer
 ```
 * **Ausência de Dependências Circulares:** Não há módulos que exijam recursivamente uns aos outros.
 * **Isolamento de Erros:** Módulos de física e cinemática não dependem de `DashboardGUI` para seus cálculos, permitindo execução headless em suítes de teste CLI.
+
+---
+
+## 4. AUDITORIA E MELHORIAS DA VERSÃO V8 — PAINEL PROFISSIONAL
+
+| ID | Componente | Gravidade | Descrição / Oportunidade | Solução Implementada na V8 |
+| :--- | :--- | :--- | :--- | :--- |
+| **AUD-08** | `DashboardGUI.lua` | **MÉDIA** | Navegação em 5 abas agrupava controles heterogêneos de ESP e Logs. | Reestruturação para 8 abas funcionais: Dashboard, AimSimulation, SilentAim, ESP, Ballistics, Diagnostics, Logs e Settings. |
+| **AUD-09** | `DashboardGUI.lua` | **BAIXA** | Toggles sem rótulo visual explícito de status ON/OFF. | Implementação de selos visuais dinâmicos `[ ON ]` (verde néon) e `[ OFF ]` (grafite) com indicador deslizante. |
+| **AUD-10** | `DashboardGUI.lua` | **BAIXA** | EventLog sem busca por texto e sem contador em tempo real. | Adicionada barra de busca interativa em tempo real com contador de eventos exibidos vs totais. |
+| **AUD-11** | `SimConfig.lua` | **BAIXA** | Faltavam controles de transparência da janela e deadzone angular no esquema reativo. | Inclusão de `AimDeadzoneDeg` e `WindowTransparency` no SCHEMA e sincronização imediata no painel. |
+| **AUD-12** | `DiagnosticAI.lua` | **MÉDIA** | Falta de visualização direta dos relatórios JSON e Markdown na interface gráfica. | Criação de modal de inspeção de exportação com texto selecionável e feedback de status no painel. |
+

@@ -323,6 +323,10 @@ local DEFAULT_OVERRIDES: any = {
     ProjectileType = "Physics",
     ProjectileGravity = 196.2,
     ProjectileDropComp = true,
+    ShowTargetTags = true,
+    EspMaxDistance = 500,
+    AimDeadzoneDeg = 0.5,
+    WindowTransparency = 0.0,
     ConfigVersion = CONFIG_VERSION,
 }
 for k, v in pairs(DEFAULT_OVERRIDES) do DEFAULT_PROFILE[k] = v end
@@ -362,6 +366,10 @@ local SCHEMA: { [string]: any } = {
     HistoryLimit = { t = "number", min = 5, max = 500 }, Theme = { t = "string", enum = { "Dark", "Darker" } },
     AccentRed = { t = "boolean" }, UiScale = { t = "number", min = 0.7, max = 1.5 },
     PanelEnabled = { t = "boolean" }, SidebarEnabled = { t = "boolean" },
+    ShowTargetTags = { t = "boolean" },
+    EspMaxDistance = { t = "number", min = 20, max = 2000 },
+    AimDeadzoneDeg = { t = "number", min = 0, max = 15 },
+    WindowTransparency = { t = "number", min = 0, max = 0.8 },
     PersistenceEnabled = { t = "boolean" }, ConfigVersion = { t = "number", min = 1, max = 1000 },
 }
 

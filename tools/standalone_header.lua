@@ -1,6 +1,6 @@
 --!strict
 -- =========================================================================
--- DeepHat_Standalone.lua (v7.0 PRO - Professional Simulation & Diagnostics Platform)
+-- DeepHat_Standalone.lua (v8.0 PRO - Professional Simulation & Diagnostics Platform)
 -- Motor Autônomo 100% Consolidado para loadstring / Injeção / Roblox Studio
 -- Zero dependências externas (sem require). Funciona direto via game:HttpGet.
 -- =========================================================================

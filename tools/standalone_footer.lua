@@ -1,4 +1,4 @@
-print("[DeepHat v7.0 PRO] Suíte autônoma carregada com sucesso! Pressione [HOME] ou [RightShift] para abrir/fechar.")
+print("[DeepHat v8.0 PRO] Suíte autônoma carregada com sucesso! Pressione [HOME] ou [RightShift] para abrir/fechar.")
 
 -- Verificação de integridade da GUI
 if DashboardGUI and not DashboardGUI.GetScreenGui() then
@@ -11,7 +11,7 @@ end
 
 pcall(function()
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "DeepHat v7.0 PRO",
+        Title = "DeepHat v8.0 PRO",
         Text = "Interface carregada! Pressione [HOME] ou [RightShift] para abrir/fechar.",
         Duration = 5
     })

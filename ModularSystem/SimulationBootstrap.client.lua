@@ -431,6 +431,19 @@ DashboardGUI.OnSpawnTestDummy = function()
     end
 end
 
+DashboardGUI.OnClearTestDummies = function()
+    local folder = Workspace:FindFirstChild("DeepHat_TestTargets")
+    local count = 0
+    if folder then
+        for _, child in ipairs(folder:GetChildren()) do
+            pcall(function() child:Destroy() end)
+            count = count + 1
+        end
+    end
+    Renderer:ClearAll()
+    DashboardGUI.AddDiagnosticLog("TEST_TARGET", string.format("Limpeza concluída: %d manequins sintéticos removidos.", count), "INFO")
+end
+
 DashboardGUI.OnRunLosScenario = function(id: string)
     local outcome, res = ScenarioRunner.Run(Tracker, id)
     if outcome and res then
@@ -510,6 +523,46 @@ DashboardGUI.OnRunFullDiagnostic = function()
     local report = DiagnosticAI.AnalyzeSystemState(state.Telemetry, state.LosHistory, nil, state.LastShot)
     DashboardGUI.AddDiagnosticLog("DIAGNOSTIC_AI", string.format("[%s] %s (Módulo: %s)", report.Status, report.Summary, report.AffectedModule), report.Status == "HEALTHY" and "OK" or "WARN")
     return report
+end
+
+DashboardGUI.OnExportDiagnosticsJSON = function(): string
+    local state = {
+        Telemetry = {
+            angularVelocity = calculatedAngVel,
+            isObstructed = isObstructed,
+            targetName = targetName,
+            mode = currentMode,
+            decoupledAngle = decoupledAngle,
+            silentAimActive = silentAimActive,
+        },
+        LosHistory = Tracker.LosHistory,
+        LastShot = Tracker.LastShotResult,
+        SimConfig = SimConfig,
+    }
+    local report = DiagnosticAI.AnalyzeSystemState(state.Telemetry, state.LosHistory, nil, state.LastShot)
+    local jsonStr = DiagnosticAI.ExportJSON(report)
+    DashboardGUI.AddDiagnosticLog("EXPORT", "Relatório de diagnóstico exportado em formato JSON.", "OK")
+    return jsonStr
+end
+
+DashboardGUI.OnExportDiagnosticsMarkdown = function(): string
+    local state = {
+        Telemetry = {
+            angularVelocity = calculatedAngVel,
+            isObstructed = isObstructed,
+            targetName = targetName,
+            mode = currentMode,
+            decoupledAngle = decoupledAngle,
+            silentAimActive = silentAimActive,
+        },
+        LosHistory = Tracker.LosHistory,
+        LastShot = Tracker.LastShotResult,
+        SimConfig = SimConfig,
+    }
+    local report = DiagnosticAI.AnalyzeSystemState(state.Telemetry, state.LosHistory, nil, state.LastShot)
+    local mdStr = DiagnosticAI.GenerateMarkdownReport(report)
+    DashboardGUI.AddDiagnosticLog("EXPORT", "Relatório de diagnóstico exportado em formato Markdown.", "OK")
+    return mdStr
 end
 
 -- Gerenciamento de Input para Mira (RMB / MouseButton2) e Disparo (LMB / MouseButton1)
@@ -690,7 +743,8 @@ RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, fun
             -- 4. Realce Visual Dinâmico em Lote (ESP Chams e Tags 3D com limpeza automática)
             if enableESP then
                 Renderer:SyncBatchHighlights(Detector.CandidatePool, bestTarget, isObstructed)
-                if bestTarget and targetDistance then
+                local showTags = SimConfig.Get("ShowTargetTags") ~= false
+                if showTags and bestTarget and targetDistance then
                     local targetHealth: number? = nil
                     if targetHumanoid then
                         targetHealth = targetHumanoid.Health

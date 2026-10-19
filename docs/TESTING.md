@@ -103,3 +103,8 @@ Para validar a física real do motor Roblox, utilize o seguinte procedimento:
 | **REG-06** | Módulo Desligado | `SilentAimEnabled = false` | `Outcome = MODULE_DISABLED`, parado na Etapa 1 | **APROVADO** |
 | **REG-07** | Balística com Gravidade | Projétil físico a 200 studs, $g = 196.2$ | Curvatura comprovada com $\Delta Y > 0$ e colisão | **APROVADO** |
 | **REG-08** | Invalidação por Morte | Humanoid com Health = 0 durante rastreamento | Alvo deselecionado imediatamente sem travar mira | **APROVADO** |
+| **REG-09** | Alternância das 8 Abas | Clique em Dashboard, AimSimulation, SilentAim, ESP, Ballistics, Diagnostics, Logs, Settings | Transição fluida sem perda de estado reativo | **APROVADO** |
+| **REG-10** | Filtro de Severidade e Busca no Log | Filtro por severidade (WARN, FAIL, etc.) e busca de substring | Apenas eventos correspondentes são renderizados, com contagem sincronizada | **APROVADO** |
+| **REG-11** | Prevenção de Vazamento em Tool | Equipar/desequipar ferramenta 10 vezes seguidas | Evento `.Activated` anterior é desconectado; sem tiros múltiplos duplicados | **APROVADO** |
+| **REG-12** | Compilação Luau do Bundle Standalone | `luau-compile.exe DeepHat_Standalone.lua` | Compilação sem erros sintáticos ou tipagem (Exit Code 0) | **APROVADO** |
+
